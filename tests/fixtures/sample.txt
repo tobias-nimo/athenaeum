@@ -1,0 +1,5 @@
+This is a plain text file used for testing.
+It has no markdown formatting.
+Line three of the document.
+Line four with some keywords: search, query, knowledge base.
+Final line of the sample text file.
