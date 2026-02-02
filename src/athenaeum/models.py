@@ -35,6 +35,7 @@ class Document(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     file_size: int = Field(0, description="Original file size in bytes")
     file_type: str = Field("", description="Original file extension")
+    tags: set[str] = Field(default_factory=set, description="Free-form tags for filtering")
 
     def format_toc(self) -> str:
         """Format table of contents as a readable string."""
@@ -56,6 +57,7 @@ class SearchHit(BaseModel):
     name: str = Field(..., description="Document name")
     num_lines: int = Field(..., description="Total lines in document")
     table_of_contents: str = Field(..., description="Formatted table of contents")
+    tags: set[str] = Field(default_factory=set, description="Document tags")
     score: float = Field(default=0.0, description="Search relevance score")
     snippet: str = Field(default="", description="Relevant text snippet")
 

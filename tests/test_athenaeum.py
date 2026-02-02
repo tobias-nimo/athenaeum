@@ -123,3 +123,70 @@ def test_multiple_docs(
     athenaeum.load_doc(str(sample_txt_path))
     docs = athenaeum.list_docs()
     assert len(docs) == 2
+
+
+def test_load_doc_with_tags(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+    athenaeum.load_doc(str(sample_md_path), tags={"report", "finance"})
+    docs = athenaeum.list_docs()
+    assert len(docs) == 1
+    assert docs[0].tags == {"report", "finance"}
+
+
+def test_tag_doc(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+    doc_id = athenaeum.load_doc(str(sample_md_path))
+    athenaeum.tag_doc(doc_id, {"new-tag", "another"})
+    docs = athenaeum.list_docs()
+    assert docs[0].tags == {"new-tag", "another"}
+
+
+def test_untag_doc(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+    doc_id = athenaeum.load_doc(str(sample_md_path), tags={"a", "b", "c"})
+    athenaeum.untag_doc(doc_id, {"b"})
+    docs = athenaeum.list_docs()
+    assert docs[0].tags == {"a", "c"}
+
+
+def test_list_tags(
+    athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path), tags={"alpha", "beta"})
+    athenaeum.load_doc(str(sample_txt_path), tags={"beta", "gamma"})
+    assert athenaeum.list_tags() == {"alpha", "beta", "gamma"}
+
+
+def test_list_docs_filter_by_tags(
+    athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path), tags={"report"})
+    athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
+    filtered = athenaeum.list_docs(tags={"report"})
+    assert len(filtered) == 1
+    assert filtered[0].name == "sample.md"
+
+
+def test_search_docs_filter_by_tags(
+    athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path), tags={"report"})
+    athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
+    results = athenaeum.search_docs("sample", scope="names", tags={"report"})
+    assert len(results) == 1
+    assert results[0].name == "sample.md"
+
+
+def test_search_docs_multiple_tags_or(
+    athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path), tags={"report"})
+    athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
+    results = athenaeum.search_docs("sample", scope="names", tags={"report", "notes"})
+    assert len(results) == 2
+
+
+def test_search_docs_no_tags_returns_all(
+    athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path), tags={"report"})
+    athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
+    results = athenaeum.search_docs("sample", scope="names")
+    assert len(results) == 2

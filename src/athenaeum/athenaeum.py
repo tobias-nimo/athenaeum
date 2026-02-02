@@ -53,11 +53,12 @@ class Athenaeum:
                 )
                 self._bm25.add_chunks(chunks)
 
-    def load_doc(self, path: str) -> str:
+    def load_doc(self, path: str, tags: set[str] | None = None) -> str:
         """Load a document into the knowledge base.
 
         Args:
             path: Path to the document file.
+            tags: Optional set of tags to assign to the document.
 
         Returns:
             The document ID.
@@ -97,6 +98,7 @@ class Athenaeum:
             table_of_contents=toc,
             file_size=file_path.stat().st_size,
             file_type=ext,
+            tags=tags or set(),
         )
         self._doc_store.add(doc)
 
@@ -109,16 +111,52 @@ class Athenaeum:
 
         return doc_id
 
-    def list_docs(self) -> list[SearchHit]:
-        """List all documents in the knowledge base."""
+    def tag_doc(self, doc_id: str, tags: set[str]) -> None:
+        """Add tags to an existing document.
+
+        Args:
+            doc_id: Document identifier.
+            tags: Tags to add.
+        """
+        doc = self._doc_store.get(doc_id)
+        if doc is None:
+            raise ValueError(f"Document not found: {doc_id}")
+        doc.tags |= tags
+        self._doc_store.add(doc)
+
+    def untag_doc(self, doc_id: str, tags: set[str]) -> None:
+        """Remove tags from an existing document.
+
+        Args:
+            doc_id: Document identifier.
+            tags: Tags to remove.
+        """
+        doc = self._doc_store.get(doc_id)
+        if doc is None:
+            raise ValueError(f"Document not found: {doc_id}")
+        doc.tags -= tags
+        self._doc_store.add(doc)
+
+    def list_tags(self) -> set[str]:
+        """Return all tags across all documents."""
+        return self._doc_store.list_tags()
+
+    def list_docs(self, tags: set[str] | None = None) -> list[SearchHit]:
+        """List documents in the knowledge base, optionally filtered by tags.
+
+        Args:
+            tags: If provided, only return documents matching any of these tags (OR semantics).
+        """
+        docs = self._doc_store.list_by_tags(tags) if tags else self._doc_store.list_all()
         results = []
-        for doc in self._doc_store.list_all():
+        for doc in docs:
             results.append(
                 SearchHit(
                     id=doc.id,
                     name=doc.name,
                     num_lines=doc.num_lines,
                     table_of_contents=doc.format_toc(),
+                    tags=doc.tags,
                 )
             )
         return results
@@ -129,6 +167,7 @@ class Athenaeum:
         top_k: int = 10,
         scope: Literal["names", "contents"] = "contents",
         strategy: Literal["hybrid", "bm25", "vector"] = "hybrid",
+        tags: set[str] | None = None,
     ) -> list[SearchHit]:
         """Search across all documents.
 
@@ -137,14 +176,21 @@ class Athenaeum:
             top_k: Maximum number of results.
             scope: ``"contents"`` to search within documents, ``"names"`` to search names only.
             strategy: Search strategy (only for ``scope="contents"``).
+            tags: If provided, only search documents matching any of these tags (OR semantics).
 
         Returns:
             Ranked list of matching documents.
         """
-        if scope == "names":
-            return self._search_by_name(query, top_k)
+        doc_ids: set[str] | None = None
+        if tags:
+            doc_ids = {d.id for d in self._doc_store.list_by_tags(tags)}
+            if not doc_ids:
+                return []
 
-        chunks = self._search_chunks(query, top_k=top_k * 3, strategy=strategy)
+        if scope == "names":
+            return self._search_by_name(query, top_k, doc_ids=doc_ids)
+
+        chunks = self._search_chunks(query, top_k=top_k * 3, strategy=strategy, doc_ids=doc_ids)
 
         # Aggregate chunks by document
         doc_scores: dict[str, float] = {}
@@ -165,6 +211,7 @@ class Athenaeum:
                     name=doc.name,
                     num_lines=doc.num_lines,
                     table_of_contents=doc.format_toc(),
+                    tags=doc.tags,
                     score=score,
                     snippet=doc_snippets.get(doc_id, ""),
                 )
@@ -240,10 +287,14 @@ class Athenaeum:
             total_lines=len(lines),
         )
 
-    def _search_by_name(self, query: str, top_k: int) -> list[SearchHit]:
+    def _search_by_name(
+        self, query: str, top_k: int, doc_ids: set[str] | None = None
+    ) -> list[SearchHit]:
         query_lower = query.lower()
         scored = []
         for doc in self._doc_store.list_all():
+            if doc_ids is not None and doc.id not in doc_ids:
+                continue
             name_lower = doc.name.lower()
             if query_lower in name_lower:
                 # Simple relevance: exact match > contains
@@ -257,6 +308,7 @@ class Athenaeum:
                 name=doc.name,
                 num_lines=doc.num_lines,
                 table_of_contents=doc.format_toc(),
+                tags=doc.tags,
                 score=score,
             )
             for doc, score in scored[:top_k]
@@ -268,17 +320,18 @@ class Athenaeum:
         top_k: int,
         strategy: Literal["hybrid", "bm25", "vector"] = "hybrid",
         doc_id: str | None = None,
+        doc_ids: set[str] | None = None,
     ) -> list[tuple[ChunkMetadata, float]]:
         """Internal: run search using the given strategy."""
         if strategy == "bm25":
-            return self._bm25.search(query, top_k=top_k, doc_id=doc_id)
+            return self._bm25.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
 
         if strategy == "vector":
-            return self._vector.search(query, top_k=top_k, doc_id=doc_id)
+            return self._vector.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
 
         # hybrid
-        bm25_results = self._bm25.search(query, top_k=top_k, doc_id=doc_id)
-        vector_results = self._vector.search(query, top_k=top_k, doc_id=doc_id)
+        bm25_results = self._bm25.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
+        vector_results = self._vector.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
         return reciprocal_rank_fusion(
             [bm25_results, vector_results],
             k=self._config.rrf_k,

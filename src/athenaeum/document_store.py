@@ -48,6 +48,17 @@ class DocumentStore:
             self._save()
         return doc
 
+    def list_by_tags(self, tags: set[str]) -> list[Document]:
+        """Return documents matching ANY of the given tags (OR semantics)."""
+        return [doc for doc in self._docs.values() if doc.tags & tags]
+
+    def list_tags(self) -> set[str]:
+        """Return the union of all tags across all documents."""
+        result: set[str] = set()
+        for doc in self._docs.values():
+            result |= doc.tags
+        return result
+
     @property
     def count(self) -> int:
         return len(self._docs)

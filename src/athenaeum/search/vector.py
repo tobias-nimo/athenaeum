@@ -46,6 +46,7 @@ class VectorIndex:
         query: str,
         top_k: int = 10,
         doc_id: str | None = None,
+        doc_ids: set[str] | None = None,
     ) -> list[tuple[ChunkMetadata, float]]:
         """Search for similar chunks, returning (chunk, score) pairs.
 
@@ -54,6 +55,8 @@ class VectorIndex:
         kwargs: dict[str, object] = {"k": top_k}
         if doc_id is not None:
             kwargs["filter"] = {"doc_id": doc_id}
+        elif doc_ids is not None:
+            kwargs["filter"] = {"doc_id": {"$in": sorted(doc_ids)}}
 
         results = self._store.similarity_search_with_relevance_scores(query, **kwargs)  # type: ignore[arg-type]
 

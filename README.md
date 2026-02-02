@@ -49,11 +49,12 @@ docs = kb.list_docs()
 Load a document into the knowledge base, automatically extracting content, metadata, and embeddings.
 
 ```python
-load_doc(path: str) -> str
+load_doc(path: str, tags: set[str] | None = None) -> str
 ```
 
 **Parameters:**
 - `path`: Path to the document file
+- `tags`: Optional set of tags to assign to the document
 
 **Supported formats:** PDF, PPTX, DOCX, XLSX, JSON, CSV, TXT, MD, HTML, XML, RTF, EPUB
 
@@ -64,10 +65,13 @@ load_doc(path: str) -> str
 List all documents currently stored in the knowledge base.
 
 ```python
-list_docs() -> list[SearchHit]
+list_docs(tags: set[str] | None = None) -> list[SearchHit]
 ```
 
-**Returns:** A list of documents with metadata (id, name, line count, table of contents) and relevance scores.
+**Parameters:**
+- `tags`: Optional set of tags to filter by (OR semantics)
+
+**Returns:** A list of documents with metadata (id, name, line count, table of contents, tags) and relevance scores.
 
 ### `search_docs`
 
@@ -79,12 +83,14 @@ search_docs(
     top_k: int = 10,
     scope: Literal["names", "contents"] = "contents",
     strategy: Literal["hybrid", "bm25", "vector"] = "hybrid",
+    tags: set[str] | None = None,
 ) -> list[SearchHit]
 ```
 
 **Parameters:**
 - `query`: Search query text
 - `top_k`: Maximum number of results (default: 10)
+- `tags`: Optional set of tags to filter by (OR semantics)
 - `scope`: Where to search
   - `"contents"`: Search within document contents (default)
   - `"names"`: Search only document names
@@ -181,6 +187,52 @@ def my_converter(file_path: Path) -> str:
 
 ocr = CustomOCR(fn=my_converter, extensions={".custom"})
 kb = Athenaeum(embeddings=embeddings, ocr_provider=ocr)
+```
+
+## Tags
+
+Documents can be tagged with free-form labels for filtering. Tags use OR semantics: filtering by `{"a", "b"}` returns documents tagged with either `a` or `b` (or both).
+
+```python
+# Load with tags
+doc_id = kb.load_doc("report.pdf", tags={"finance", "Q4"})
+
+# Add/remove tags later
+kb.tag_doc(doc_id, {"important"})
+kb.untag_doc(doc_id, {"Q4"})
+
+# List all tags in the knowledge base
+all_tags = kb.list_tags()  # {"finance", "important"}
+
+# Filter list_docs by tags
+finance_docs = kb.list_docs(tags={"finance"})
+
+# Filter search_docs by tags
+hits = kb.search_docs("revenue", tags={"finance"})
+```
+
+### `tag_doc`
+
+Add tags to an existing document.
+
+```python
+tag_doc(doc_id: str, tags: set[str]) -> None
+```
+
+### `untag_doc`
+
+Remove tags from an existing document.
+
+```python
+untag_doc(doc_id: str, tags: set[str]) -> None
+```
+
+### `list_tags`
+
+Return all tags across all documents.
+
+```python
+list_tags() -> set[str]
 ```
 
 ## Search strategies

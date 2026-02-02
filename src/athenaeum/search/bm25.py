@@ -49,6 +49,7 @@ class BM25Index:
         query: str,
         top_k: int = 10,
         doc_id: str | None = None,
+        doc_ids: set[str] | None = None,
     ) -> list[tuple[ChunkMetadata, float]]:
         """Search the index, returning (chunk, score) pairs sorted by score descending."""
         if not self._bm25 or not self._entries:
@@ -61,6 +62,8 @@ class BM25Index:
         for i, score in enumerate(scores):
             entry = self._entries[i]
             if doc_id is not None and entry.chunk.doc_id != doc_id:
+                continue
+            if doc_ids is not None and entry.chunk.doc_id not in doc_ids:
                 continue
             results.append((entry.chunk, float(score)))
 
