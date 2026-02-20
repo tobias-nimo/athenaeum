@@ -32,5 +32,5 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Athenaeum runtime data
-examples/athenaeum-data/
+# Playground
+playground/.athenaeum/

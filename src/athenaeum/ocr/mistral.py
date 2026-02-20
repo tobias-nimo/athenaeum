@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import os
 from pathlib import Path
 
@@ -12,7 +11,7 @@ from athenaeum.ocr.base import OCRProvider
 class MistralOCR(OCRProvider):
     """Convert documents to markdown using Mistral's OCR API."""
 
-    _EXTENSIONS = {".pdf"}
+    _EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".avif"}
 
     def __init__(self, api_key: str | None = None) -> None:
         try:
@@ -27,18 +26,42 @@ class MistralOCR(OCRProvider):
         self._client = Mistral(api_key=key)
 
     def convert(self, file_path: Path) -> str:
-        from mistralai import DocumentURLChunk, OCRRequest
-
-        encoded = base64.standard_b64encode(file_path.read_bytes()).decode()
-        data_uri = f"data:application/pdf;base64,{encoded}"
-        response = self._client.ocr.process(
-            request=OCRRequest(
-                document=DocumentURLChunk(document_url=data_uri),
-                model="mistral-ocr-latest",
-            )
+        # Upload file to Mistral Cloud
+        uploaded_file = self._client.files.upload(
+            file={
+                "file_name": file_path.name,
+                "content": file_path.read_bytes(),
+            },
+            purpose="ocr",
         )
-        pages = [page.markdown for page in response.pages]
-        return "\n\n".join(pages)
+
+        try:
+            # Get a signed URL to access the file
+            signed_url = self._client.files.get_signed_url(file_id=uploaded_file.id)
+
+            # Determine document type based on file extension
+            ext = file_path.suffix.lower()
+            if ext in {".png", ".jpg", ".jpeg", ".avif"}:
+                doc_type = "image_url"
+                url_key = "image_url"
+            else:
+                doc_type = "document_url"
+                url_key = "document_url"
+
+            # Process with OCR
+            response = self._client.ocr.process(
+                model="mistral-ocr-latest",
+                document={
+                    "type": doc_type,
+                    url_key: signed_url.url,
+                },
+            )
+
+            pages = [page.markdown for page in response.pages]
+            return "\n\n".join(pages)
+        finally:
+            # Clean up: delete the file from Mistral Cloud
+            self._client.files.delete(file_id=uploaded_file.id)
 
     def supported_extensions(self) -> set[str]:
         return self._EXTENSIONS

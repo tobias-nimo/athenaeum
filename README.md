@@ -12,7 +12,7 @@ pip install athenaeum-kb
 
 ```bash
 pip install athenaeum-kb[docling]   # Docling document converter
-pip install athenaeum-kb[mistral]   # Mistral cloud OCR (PDF only)
+pip install athenaeum-kb[mistral]   # Mistral cloud OCR (PDF + images)
 pip install athenaeum-kb[lighton]   # LightOn local model (PDF + images)
 pip install athenaeum-kb[all-ocr]   # All OCR backends
 ```
@@ -149,10 +149,10 @@ from athenaeum import AthenaeumConfig
 
 config = AthenaeumConfig(
     storage_dir=Path.home() / ".athenaeum",  # Where to store documents and indexes
-    chunk_size=80,                            # Lines per chunk
-    chunk_overlap=20,                         # Overlapping lines between chunks
-    rrf_k=60,                                 # RRF constant for hybrid search
-    default_strategy="hybrid",                # Default search strategy
+    chunk_size=80,                           # Lines per chunk
+    chunk_overlap=20,                        # Overlapping lines between chunks
+    rrf_k=60,                                # RRF constant for hybrid search
+    default_strategy="hybrid",               # Default search strategy
 )
 
 kb = Athenaeum(embeddings=embeddings, config=config)
@@ -166,7 +166,7 @@ Athenaeum supports multiple document-to-markdown converters:
 |---------|---------|-------|
 | **markitdown** (default) | PDF, PPTX, DOCX, XLSX, JSON, CSV, TXT, MD, HTML, XML, RTF, EPUB | Included in base install |
 | **docling** | PDF, PPTX, DOCX, XLSX, HTML, MD | `pip install athenaeum-kb[docling]` |
-| **mistral** | PDF | Cloud API, requires `MISTRAL_API_KEY` |
+| **mistral** | PDF, PNG, JPG, JPEG, AVIF | Cloud API, requires `MISTRAL_API_KEY` |
 | **lighton** | PDF, PNG, JPG, JPEG, TIFF, BMP | Local transformer model, supports GPU |
 
 ```python
