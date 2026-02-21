@@ -33,8 +33,9 @@ class FakeEmbeddings(Embeddings):
 
 @pytest.fixture
 def athenaeum(tmp_path: Path) -> Athenaeum:
-    config = AthenaeumConfig(storage_dir=tmp_path / "athenaeum", chunk_size=200, chunk_overlap=50)
-    return Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    from athenaeum.chunker import make_splitter
+    config = AthenaeumConfig(storage_dir=tmp_path / "athenaeum")
+    return Athenaeum(embeddings=FakeEmbeddings(), config=config, text_splitter=make_splitter(chunk_size=200, chunk_overlap=50))
 
 
 def test_load_doc_md(athenaeum: Athenaeum, sample_md_path: Path) -> None:
@@ -229,33 +230,30 @@ def test_get_tags_empty(athenaeum: Athenaeum, sample_md_path: Path) -> None:
 
 
 def test_similarity_threshold_filters_all(tmp_path: Path, sample_md_path: Path) -> None:
+    from athenaeum.chunker import make_splitter
     config = AthenaeumConfig(
         storage_dir=tmp_path / "athenaeum",
-        chunk_size=200,
-        chunk_overlap=50,
         similarity_threshold=1.0,
     )
-    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config, text_splitter=make_splitter(chunk_size=200, chunk_overlap=50))
     kb.load_doc(str(sample_md_path))
     results = kb.search_kb("search strategies", strategy="vector")
     assert results == []
 
 
 def test_similarity_threshold_zero_passes_all(tmp_path: Path, sample_md_path: Path) -> None:
+    from athenaeum.chunker import make_splitter
+    splitter = make_splitter(chunk_size=200, chunk_overlap=50)
     config_thresh = AthenaeumConfig(
         storage_dir=tmp_path / "thresh",
-        chunk_size=200,
-        chunk_overlap=50,
         similarity_threshold=0.0,
     )
     config_none = AthenaeumConfig(
         storage_dir=tmp_path / "none",
-        chunk_size=200,
-        chunk_overlap=50,
         similarity_threshold=None,
     )
-    kb_thresh = Athenaeum(embeddings=FakeEmbeddings(), config=config_thresh)
-    kb_none = Athenaeum(embeddings=FakeEmbeddings(), config=config_none)
+    kb_thresh = Athenaeum(embeddings=FakeEmbeddings(), config=config_thresh, text_splitter=splitter)
+    kb_none = Athenaeum(embeddings=FakeEmbeddings(), config=config_none, text_splitter=splitter)
     kb_thresh.load_doc(str(sample_md_path))
     kb_none.load_doc(str(sample_md_path))
     results_thresh = kb_thresh.search_kb("search", strategy="vector")
@@ -311,3 +309,44 @@ def test_search_kb_aggregate_true_default(
     results = athenaeum.search_kb("search strategies", strategy="bm25")
     assert len(results) > 0
     assert all(isinstance(r, SearchHit) for r in results)
+
+
+# --- per-call chunk params & auto_chunk tests ---
+
+
+def test_load_doc_per_call_chunk_size(tmp_path: Path, sample_md_path: Path) -> None:
+    """load_doc with explicit chunk_size/chunk_overlap overrides instance splitter."""
+    config = AthenaeumConfig(storage_dir=tmp_path / "kb")
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    # Should not raise; per-call params create a fresh splitter
+    doc_id = kb.load_doc(str(sample_md_path), chunk_size=300, chunk_overlap=30)
+    assert isinstance(doc_id, str)
+    results = kb.search_kb("search", strategy="bm25")
+    assert len(results) > 0
+
+
+def test_load_doc_per_call_separators(tmp_path: Path, sample_md_path: Path) -> None:
+    """load_doc with explicit separators overrides markdown defaults."""
+    config = AthenaeumConfig(storage_dir=tmp_path / "kb")
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    doc_id = kb.load_doc(str(sample_md_path), chunk_size=400, chunk_overlap=50, separators=["\n\n", "\n", " "])
+    assert isinstance(doc_id, str)
+
+
+def test_auto_chunk_enabled(tmp_path: Path, sample_md_path: Path) -> None:
+    """auto_chunk=True picks chunk sizes automatically; documents load without error."""
+    config = AthenaeumConfig(storage_dir=tmp_path / "kb", auto_chunk=True)
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    doc_id = kb.load_doc(str(sample_md_path))
+    assert isinstance(doc_id, str)
+    results = kb.search_kb("search", strategy="bm25")
+    assert len(results) > 0
+
+
+def test_per_call_overrides_auto_chunk(tmp_path: Path, sample_md_path: Path) -> None:
+    """Per-call chunk_size/chunk_overlap takes priority over auto_chunk."""
+    config = AthenaeumConfig(storage_dir=tmp_path / "kb", auto_chunk=True)
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    # Explicit params should be accepted even when auto_chunk is enabled
+    doc_id = kb.load_doc(str(sample_md_path), chunk_size=500, chunk_overlap=50)
+    assert isinstance(doc_id, str)

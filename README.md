@@ -49,12 +49,21 @@ docs = kb.list_docs()
 Load a document into the knowledge base, automatically extracting content, metadata, and embeddings.
 
 ```python
-load_doc(path: str, tags: set[str] | None = None) -> str
+load_doc(
+    path: str,
+    tags: set[str] | None = None,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+    separators: list[str] | None = None,
+) -> str
 ```
 
 **Parameters:**
 - `path`: Path to the document file
 - `tags`: Optional set of tags to assign to the document
+- `chunk_size`: Characters per chunk. When provided, overrides the instance `text_splitter` and `config.auto_chunk`.
+- `chunk_overlap`: Overlapping characters between consecutive chunks. When provided (together with or without `chunk_size`), overrides the instance `text_splitter` and `config.auto_chunk`.
+- `separators`: Custom separator list for splitting. When provided, replaces the default markdown-aware separators.
 
 **Supported formats:** PDF, PPTX, DOCX, XLSX, JSON, CSV, TXT, MD, HTML, XML, RTF, EPUB
 
@@ -177,8 +186,7 @@ from athenaeum import AthenaeumConfig
 
 config = AthenaeumConfig(
     storage_dir=Path.home() / ".athenaeum",  # Where to store documents and indexes
-    chunk_size=1500,                         # Characters per chunk
-    chunk_overlap=200,                       # Overlapping characters between chunks
+    auto_chunk=False,                        # Auto-select chunk sizes based on document length
     rrf_k=60,                                # RRF constant for hybrid search
     default_strategy="hybrid",               # Default search strategy
     similarity_threshold=None,               # Min cosine score [0, 1]; None = no filter
@@ -187,15 +195,29 @@ config = AthenaeumConfig(
 kb = Athenaeum(embeddings=embeddings, config=config)
 ```
 
-### Custom text splitter
+### Chunking strategies
 
-Pass any object with a `split_text(str) -> list[str]` method to override the default chunking strategy. This is useful for token-based splitting or domain-specific separator rules.
+Athenaeum supports four ways to control how documents are split into chunks, applied in priority order:
+
+#### 1. Per-document params in `load_doc` (highest priority)
+
+Override chunking for a single document by passing `chunk_size`, `chunk_overlap`, and/or `separators` directly to `load_doc`. This takes priority over everything else.
+
+```python
+# Fine-grained control per document
+doc_id = kb.load_doc("report.pdf", chunk_size=800, chunk_overlap=100)
+doc_id = kb.load_doc("notes.md", chunk_size=400, chunk_overlap=40, separators=["\n\n", "\n"])
+```
+
+#### 2. Instance-level custom splitter
+
+Pass any object with a `split_text(str) -> list[str]` method to `Athenaeum()`. Useful for token-based splitting or domain-specific rules. This is overridden by per-document params.
 
 ```python
 from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 import tiktoken
 
-enc = tiktoken.get_encoding("cl100k_base") # or tiktoken.encoding_for_model("text-embedding-3-small")
+enc = tiktoken.get_encoding("cl100k_base")
 token_splitter = RecursiveCharacterTextSplitter.from_language(
     Language.MARKDOWN,
     chunk_size=256,
@@ -206,7 +228,35 @@ token_splitter = RecursiveCharacterTextSplitter.from_language(
 kb = Athenaeum(embeddings=embeddings, config=config, text_splitter=token_splitter)
 ```
 
-> **Note:** When `text_splitter` is provided, `chunk_size` and `chunk_overlap` in `AthenaeumConfig` are ignored — sizing is controlled entirely by the splitter.
+#### 3. Auto-chunking
+
+Set `auto_chunk=True` in `AthenaeumConfig` to let Athenaeum pick optimal `chunk_size` and `chunk_overlap` automatically based on each document's character count:
+
+| Document size | `chunk_size` | `chunk_overlap` |
+|---------------|-------------|-----------------|
+| Short (< 5 000 chars) | 500 | 50 |
+| Medium (5 000 – 50 000 chars) | 1 500 | 200 |
+| Large (> 50 000 chars) | 3 000 | 400 |
+
+```python
+config = AthenaeumConfig(auto_chunk=True)
+kb = Athenaeum(embeddings=embeddings, config=config)
+```
+
+#### 4. Default splitter (lowest priority)
+
+When none of the above are configured, Athenaeum uses a markdown-aware `RecursiveCharacterTextSplitter` with `chunk_size=1 500` and `chunk_overlap=200`.
+
+A good starting point for medium-sized markdown documents (books, reports, papers):
+
+```python
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+
+splitter = RecursiveCharacterTextSplitter.from_language(
+    Language.MARKDOWN, chunk_size=1500, chunk_overlap=200
+)
+kb = Athenaeum(embeddings=embeddings, text_splitter=splitter)
+```
 
 ### Similarity threshold
 

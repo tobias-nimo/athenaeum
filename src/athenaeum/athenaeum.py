@@ -9,7 +9,7 @@ from typing import Literal, overload
 
 from langchain_core.embeddings import Embeddings
 
-from athenaeum.chunker import TextSplitter, chunk_markdown
+from athenaeum.chunker import TextSplitter, auto_chunk_splitter, chunk_markdown, make_splitter
 from athenaeum.config import AthenaeumConfig
 from athenaeum.document_store import DocumentStore
 from athenaeum.models import ChunkMetadata, ContentSearchHit, DocSummary, Document, Excerpt, SearchHit
@@ -44,27 +44,66 @@ class Athenaeum:
         )
         self._reindex_bm25()
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_splitter(
+        self,
+        markdown: str,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+        separators: list[str] | None = None,
+    ) -> TextSplitter:
+        """Return the best splitter for the given context.
+
+        Priority (highest to lowest):
+        1. Per-call params (``chunk_size``, ``chunk_overlap``, ``separators``).
+        2. Instance-level ``text_splitter`` passed to ``__init__``.
+        3. Auto-chunking (when ``config.auto_chunk=True``): sizes derived from
+           document length.
+        4. Library default: markdown-aware splitter with ``chunk_size=1 500``.
+        """
+        if chunk_size is not None or chunk_overlap is not None or separators is not None:
+            cs = chunk_size if chunk_size is not None else 1500
+            co = chunk_overlap if chunk_overlap is not None else 200
+            return make_splitter(chunk_size=cs, chunk_overlap=co, separators=separators)
+        if self._text_splitter is not None:
+            return self._text_splitter
+        if self._config.auto_chunk:
+            return auto_chunk_splitter(markdown)
+        return make_splitter()
+
     def _reindex_bm25(self) -> None:
         """Rebuild BM25 index from all stored documents."""
         for doc in self._doc_store.list_all():
             md_path = Path(doc.path_to_md)
             if md_path.exists():
                 text = md_path.read_text()
-                chunks = chunk_markdown(
-                    text,
-                    doc.id,
-                    self._config.chunk_size,
-                    self._config.chunk_overlap,
-                    text_splitter=self._text_splitter,
-                )
+                splitter = self._resolve_splitter(text)
+                chunks = chunk_markdown(text, doc.id, text_splitter=splitter)
                 self._bm25.add_chunks(chunks)
 
-    def load_doc(self, path: str, tags: set[str] | None = None) -> str:
+    def load_doc(
+        self,
+        path: str,
+        tags: set[str] | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+        separators: list[str] | None = None,
+    ) -> str:
         """Load a document into the knowledge base.
 
         Args:
             path: Path to the document file.
             tags: Optional set of tags to assign to the document.
+            chunk_size: Characters per chunk. When provided, overrides the
+                instance ``text_splitter`` and ``config.auto_chunk``.
+            chunk_overlap: Overlapping characters between chunks. When provided
+                (together with or without ``chunk_size``), overrides the
+                instance ``text_splitter`` and ``config.auto_chunk``.
+            separators: Custom separator list for splitting. When provided,
+                overrides the markdown-aware separators.
 
         Returns:
             The document ID.
@@ -109,13 +148,13 @@ class Athenaeum:
         self._doc_store.add(doc)
 
         # Index
-        chunks = chunk_markdown(
+        splitter = self._resolve_splitter(
             markdown,
-            doc_id,
-            self._config.chunk_size,
-            self._config.chunk_overlap,
-            text_splitter=self._text_splitter,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=separators,
         )
+        chunks = chunk_markdown(markdown, doc_id, text_splitter=splitter)
         self._bm25.add_chunks(chunks)
         self._vector.add_chunks(chunks)
 
