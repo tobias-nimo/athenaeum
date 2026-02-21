@@ -84,7 +84,8 @@ search_docs(
     scope: Literal["names", "contents"] = "contents",
     strategy: Literal["hybrid", "bm25", "vector"] = "hybrid",
     tags: set[str] | None = None,
-) -> list[SearchHit]
+    aggregate: bool = True,
+) -> list[SearchHit] | list[ContentSearchHit]
 ```
 
 **Parameters:**
@@ -98,8 +99,9 @@ search_docs(
   - `"hybrid"`: Combines vector and BM25 search (default)
   - `"bm25"`: Keyword-based search only
   - `"vector"`: Semantic similarity search only
+- `aggregate`: If `True` (default), collapse chunk results into one `SearchHit` per document. If `False`, return raw `ContentSearchHit` objects with exact line ranges.
 
-**Returns:** A ranked list of `SearchHit` objects matching the query.
+**Returns:** When `aggregate=True`: a ranked list of `SearchHit` objects (one per document). When `aggregate=False`: a ranked list of `ContentSearchHit` objects (one per chunk).
 
 ### `search_doc_contents`
 
@@ -153,6 +155,7 @@ config = AthenaeumConfig(
     chunk_overlap=200,                       # Overlapping characters between chunks
     rrf_k=60,                                # RRF constant for hybrid search
     default_strategy="hybrid",               # Default search strategy
+    similarity_threshold=None,               # Min cosine score [0, 1]; None = no filter
 )
 
 kb = Athenaeum(embeddings=embeddings, config=config)
@@ -178,6 +181,30 @@ kb = Athenaeum(embeddings=embeddings, config=config, text_splitter=token_splitte
 ```
 
 > **Note:** When `text_splitter` is provided, `chunk_size` and `chunk_overlap` in `AthenaeumConfig` are ignored — sizing is controlled entirely by the splitter.
+
+### Similarity threshold
+
+Filter out low-confidence vector results by setting `similarity_threshold` in `AthenaeumConfig`. Scores are cosine similarity values in [0, 1]; only chunks that meet or exceed the threshold are returned.
+
+```python
+config = AthenaeumConfig(similarity_threshold=0.35)
+kb = Athenaeum(embeddings=embeddings, config=config)
+
+# Low-scoring chunks are silently dropped from vector and hybrid results
+hits = kb.search_docs("quarterly revenue", strategy="vector")
+```
+
+> **Breaking change:** Athenaeum now creates Chroma collections with `hnsw:space=cosine`. If you have an existing persistent index (in `index/chroma/`) that was created without this setting, **delete the directory and re-index your documents** to get correct scores. Existing collections retain their original L2 distance function and will continue to produce scores outside [0, 1].
+
+### Chunk-level results
+
+Pass `aggregate=False` to `search_docs` to receive raw chunk-level hits instead of one result per document. Each hit includes the exact line range, making it easy to pinpoint where a match occurs.
+
+```python
+chunks = kb.search_docs("quarterly revenue", aggregate=False)
+for hit in chunks:
+    print(f"{hit.name} lines {hit.line_range[0]}-{hit.line_range[1]}: {hit.text[:80]}")
+```
 
 ## OCR backends
 
@@ -277,7 +304,7 @@ When `load_doc(path)` is called:
 |-------|-------------|
 | `Document` | Full document record (id, name, paths, line count, TOC, timestamps) |
 | `SearchHit` | Document-level search result with score and snippet |
-| `ContentSearchHit` | Within-document search result with line range and text |
+| `ContentSearchHit` | Within-document search result with line range, text, and optional `name` (populated by `search_docs(aggregate=False)`) |
 | `Excerpt` | Text fragment from `read_doc` |
 | `TOCEntry` | Table of contents entry (title, level, line range) |
 | `ChunkMetadata` | Internal chunk metadata for indexing |

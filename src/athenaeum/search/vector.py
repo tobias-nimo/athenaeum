@@ -22,6 +22,7 @@ class VectorIndex:
         kwargs: dict[str, object] = {
             "embedding_function": embeddings,
             "collection_name": collection_name,
+            "collection_metadata": {"hnsw:space": "cosine"},
         }
         if persist_directory is not None:
             kwargs["persist_directory"] = str(persist_directory)
@@ -47,10 +48,11 @@ class VectorIndex:
         top_k: int = 10,
         doc_id: str | None = None,
         doc_ids: set[str] | None = None,
+        similarity_threshold: float | None = None,
     ) -> list[tuple[ChunkMetadata, float]]:
         """Search for similar chunks, returning (chunk, score) pairs.
 
-        Scores are similarity scores (higher = more similar).
+        Scores are cosine similarity scores in [0, 1] (higher = more similar).
         """
         kwargs: dict[str, object] = {"k": top_k}
         if doc_id is not None:
@@ -62,6 +64,8 @@ class VectorIndex:
 
         output: list[tuple[ChunkMetadata, float]] = []
         for doc, score in results:
+            if similarity_threshold is not None and score < similarity_threshold:
+                continue
             meta = doc.metadata
             chunk = ChunkMetadata(
                 doc_id=meta["doc_id"],

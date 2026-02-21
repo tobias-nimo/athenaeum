@@ -8,6 +8,7 @@ import pytest
 from langchain_core.embeddings import Embeddings
 
 from athenaeum import Athenaeum, AthenaeumConfig
+from athenaeum.models import ContentSearchHit, SearchHit
 
 
 class FakeEmbeddings(Embeddings):
@@ -190,3 +191,91 @@ def test_search_docs_no_tags_returns_all(
     athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
     results = athenaeum.search_docs("sample", scope="names")
     assert len(results) == 2
+
+
+# --- similarity_threshold tests ---
+
+
+def test_similarity_threshold_filters_all(tmp_path: Path, sample_md_path: Path) -> None:
+    config = AthenaeumConfig(
+        storage_dir=tmp_path / "athenaeum",
+        chunk_size=200,
+        chunk_overlap=50,
+        similarity_threshold=1.0,
+    )
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    kb.load_doc(str(sample_md_path))
+    results = kb.search_docs("search strategies", strategy="vector")
+    assert results == []
+
+
+def test_similarity_threshold_zero_passes_all(tmp_path: Path, sample_md_path: Path) -> None:
+    config_thresh = AthenaeumConfig(
+        storage_dir=tmp_path / "thresh",
+        chunk_size=200,
+        chunk_overlap=50,
+        similarity_threshold=0.0,
+    )
+    config_none = AthenaeumConfig(
+        storage_dir=tmp_path / "none",
+        chunk_size=200,
+        chunk_overlap=50,
+        similarity_threshold=None,
+    )
+    kb_thresh = Athenaeum(embeddings=FakeEmbeddings(), config=config_thresh)
+    kb_none = Athenaeum(embeddings=FakeEmbeddings(), config=config_none)
+    kb_thresh.load_doc(str(sample_md_path))
+    kb_none.load_doc(str(sample_md_path))
+    results_thresh = kb_thresh.search_docs("search", strategy="vector")
+    results_none = kb_none.search_docs("search", strategy="vector")
+    assert len(results_thresh) == len(results_none)
+
+
+# --- aggregate=False tests ---
+
+
+def test_search_docs_aggregate_false_returns_content_hits(
+    athenaeum: Athenaeum, sample_md_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path))
+    results = athenaeum.search_docs("search strategies", strategy="bm25", aggregate=False)
+    assert len(results) > 0
+    assert all(isinstance(r, ContentSearchHit) for r in results)
+
+
+def test_search_docs_aggregate_false_name_populated(
+    athenaeum: Athenaeum, sample_md_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path))
+    results = athenaeum.search_docs("search strategies", strategy="bm25", aggregate=False)
+    assert len(results) > 0
+    assert all(r.name == "sample.md" for r in results)
+
+
+def test_search_docs_aggregate_false_respects_top_k(
+    athenaeum: Athenaeum, sample_md_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path))
+    top_k = 2
+    results = athenaeum.search_docs("search", strategy="bm25", top_k=top_k, aggregate=False)
+    assert len(results) <= top_k
+
+
+def test_search_docs_aggregate_false_with_tags(
+    athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path), tags={"report"})
+    athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
+    results = athenaeum.search_docs(
+        "search", strategy="bm25", tags={"report"}, aggregate=False
+    )
+    assert all(r.name == "sample.md" for r in results)
+
+
+def test_search_docs_aggregate_true_default(
+    athenaeum: Athenaeum, sample_md_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path))
+    results = athenaeum.search_docs("search strategies", strategy="bm25")
+    assert len(results) > 0
+    assert all(isinstance(r, SearchHit) for r in results)

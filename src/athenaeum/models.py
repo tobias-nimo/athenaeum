@@ -75,6 +75,9 @@ class ContentSearchHit(BaseModel):
     """Search result for within-document content search."""
 
     doc_id: str = Field(..., description="Document identifier")
+    name: str = Field(
+        "", description="Document filename; populated by search_docs(aggregate=False)"
+    )
     line_range: tuple[int, int] = Field(..., description="Line range of the match")
     text: str = Field(..., description="Matching text content")
     score: float = Field(0.0, description="Search relevance score")

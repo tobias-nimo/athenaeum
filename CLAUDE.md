@@ -69,7 +69,7 @@ src/athenaeum/
 |-------|---------|
 | `Document` | Full document record with paths, TOC, timestamps, tags |
 | `SearchHit` | Document-level search result |
-| `ContentSearchHit` | Within-document search result with line range |
+| `ContentSearchHit` | Within-document search result with line range; `name` populated by `search_docs(aggregate=False)` |
 | `Excerpt` | Text fragment from read_doc |
 | `TOCEntry` | Table of contents entry (title, level, line range) |
 | `ChunkMetadata` | Internal chunk for indexing |
@@ -110,6 +110,7 @@ AthenaeumConfig(
     chunk_overlap=200,                        # Overlap in characters between consecutive chunks
     rrf_k=60,                                 # RRF constant for hybrid search
     default_strategy="hybrid",                # Default search strategy
+    similarity_threshold=None,               # Min cosine score [0,1]; None = no filter
 )
 ```
 
@@ -133,7 +134,7 @@ kb = Athenaeum(embeddings=embeddings, config=config, ocr_provider=ocr)
 # Core methods
 doc_id = kb.load_doc(path, tags=None)           # Load document
 kb.list_docs(tags=None)                          # List all documents
-kb.search_docs(query, top_k, scope, strategy, tags)  # Search across docs
+kb.search_docs(query, top_k, scope, strategy, tags, aggregate=True)  # Search across docs
 kb.search_doc_contents(doc_id, query, top_k, strategy)  # Search within doc
 kb.read_doc(doc_id, start_line, end_line)        # Read line range
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import Literal, overload
 
 from langchain_core.embeddings import Embeddings
 
@@ -171,6 +171,28 @@ class Athenaeum:
             )
         return results
 
+    @overload
+    def search_docs(
+        self,
+        query: str,
+        top_k: int = ...,
+        scope: Literal["names", "contents"] = ...,
+        strategy: Literal["hybrid", "bm25", "vector"] = ...,
+        tags: set[str] | None = ...,
+        aggregate: Literal[True] = ...,
+    ) -> list[SearchHit]: ...
+
+    @overload
+    def search_docs(
+        self,
+        query: str,
+        top_k: int = ...,
+        scope: Literal["names", "contents"] = ...,
+        strategy: Literal["hybrid", "bm25", "vector"] = ...,
+        tags: set[str] | None = ...,
+        aggregate: Literal[False] = ...,
+    ) -> list[ContentSearchHit]: ...
+
     def search_docs(
         self,
         query: str,
@@ -178,7 +200,8 @@ class Athenaeum:
         scope: Literal["names", "contents"] = "contents",
         strategy: Literal["hybrid", "bm25", "vector"] = "hybrid",
         tags: set[str] | None = None,
-    ) -> list[SearchHit]:
+        aggregate: bool = True,
+    ) -> list[SearchHit] | list[ContentSearchHit]:
         """Search across all documents.
 
         Args:
@@ -187,9 +210,13 @@ class Athenaeum:
             scope: ``"contents"`` to search within documents, ``"names"`` to search names only.
             strategy: Search strategy (only for ``scope="contents"``).
             tags: If provided, only search documents matching any of these tags (OR semantics).
+            aggregate: If ``True`` (default), collapse chunk results into one ``SearchHit`` per
+                document.  If ``False``, return raw ``ContentSearchHit`` objects with exact line
+                ranges.  Has no effect when ``scope="names"``.
 
         Returns:
-            Ranked list of matching documents.
+            When ``aggregate=True``: ranked list of ``SearchHit`` objects (one per document).
+            When ``aggregate=False``: ranked list of ``ContentSearchHit`` objects (one per chunk).
         """
         doc_ids: set[str] | None = None
         if tags:
@@ -199,6 +226,22 @@ class Athenaeum:
 
         if scope == "names":
             return self._search_by_name(query, top_k, doc_ids=doc_ids)
+
+        if not aggregate:
+            chunks = self._search_chunks(query, top_k=top_k, strategy=strategy, doc_ids=doc_ids)
+            results_content: list[ContentSearchHit] = []
+            for chunk, score in chunks:
+                doc = self._doc_store.get(chunk.doc_id)
+                results_content.append(
+                    ContentSearchHit(
+                        doc_id=chunk.doc_id,
+                        name=doc.name if doc is not None else "",
+                        line_range=(chunk.start_line, chunk.end_line),
+                        text=chunk.text,
+                        score=score,
+                    )
+                )
+            return results_content
 
         chunks = self._search_chunks(query, top_k=top_k * 3, strategy=strategy, doc_ids=doc_ids)
 
@@ -210,12 +253,12 @@ class Athenaeum:
                 doc_scores[chunk.doc_id] = score
                 doc_snippets[chunk.doc_id] = chunk.text[:200]
 
-        results = []
+        results_hit: list[SearchHit] = []
         for doc_id, score in sorted(doc_scores.items(), key=lambda x: x[1], reverse=True):
             doc = self._doc_store.get(doc_id)
             if doc is None:
                 continue
-            results.append(
+            results_hit.append(
                 SearchHit(
                     id=doc.id,
                     name=doc.name,
@@ -227,7 +270,7 @@ class Athenaeum:
                 )
             )
 
-        return results[:top_k]
+        return results_hit[:top_k]
 
     def search_doc_contents(
         self,
@@ -256,6 +299,7 @@ class Athenaeum:
         return [
             ContentSearchHit(
                 doc_id=chunk.doc_id,
+                name="",
                 line_range=(chunk.start_line, chunk.end_line),
                 text=chunk.text,
                 score=score,
@@ -337,11 +381,17 @@ class Athenaeum:
             return self._bm25.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
 
         if strategy == "vector":
-            return self._vector.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
+            return self._vector.search(
+                query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids,
+                similarity_threshold=self._config.similarity_threshold,
+            )
 
         # hybrid
         bm25_results = self._bm25.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
-        vector_results = self._vector.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
+        vector_results = self._vector.search(
+            query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids,
+            similarity_threshold=self._config.similarity_threshold,
+        )
         return reciprocal_rank_fusion(
             [bm25_results, vector_results],
             k=self._config.rrf_k,
