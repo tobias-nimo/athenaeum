@@ -30,10 +30,10 @@ kb = Athenaeum(embeddings=embeddings)
 doc_id = kb.load_doc("report.pdf")
 
 # Search across all documents
-hits = kb.search_docs("quarterly revenue", top_k=5)
+hits = kb.search_kb("quarterly revenue", top_k=5)
 
 # Search within a specific document
-chunks = kb.search_doc_contents(doc_id, "executive summary")
+chunks = kb.search_doc(doc_id, "executive summary")
 
 # Read specific lines
 excerpt = kb.read_doc(doc_id, start_line=1, end_line=50)
@@ -65,20 +65,20 @@ load_doc(path: str, tags: set[str] | None = None) -> str
 List all documents currently stored in the knowledge base.
 
 ```python
-list_docs(tags: set[str] | None = None) -> list[SearchHit]
+list_docs(tags: set[str] | None = None) -> list[DocSummary]
 ```
 
 **Parameters:**
 - `tags`: Optional set of tags to filter by (OR semantics)
 
-**Returns:** A list of documents with metadata (id, name, line count, table of contents, tags) and relevance scores.
+**Returns:** A list of `DocSummary` objects with `id`, `name`, and `num_lines`. Use `get_toc` and `get_tags` to retrieve per-document details.
 
-### `search_docs`
+### `search_kb`
 
 Search across all documents in the knowledge base.
 
 ```python
-search_docs(
+search_kb(
     query: str,
     top_k: int = 10,
     scope: Literal["names", "contents"] = "contents",
@@ -103,12 +103,12 @@ search_docs(
 
 **Returns:** When `aggregate=True`: a ranked list of `SearchHit` objects (one per document). When `aggregate=False`: a ranked list of `ContentSearchHit` objects (one per chunk).
 
-### `search_doc_contents`
+### `search_doc`
 
 Search within a specific document.
 
 ```python
-search_doc_contents(
+search_doc(
     doc_id: str,
     query: str,
     top_k: int = 5,
@@ -123,6 +123,32 @@ search_doc_contents(
 - `strategy`: Search strategy (`"hybrid"`, `"bm25"`, or `"vector"`)
 
 **Returns:** A list of matching content fragments with line ranges and relevance scores.
+
+### `get_toc`
+
+Return the table of contents for a document.
+
+```python
+get_toc(doc_id: str) -> str
+```
+
+**Parameters:**
+- `doc_id`: Document identifier
+
+**Returns:** Formatted table of contents string with section titles and line ranges.
+
+### `get_tags`
+
+Return the tags for a document.
+
+```python
+get_tags(doc_id: str) -> set[str]
+```
+
+**Parameters:**
+- `doc_id`: Document identifier
+
+**Returns:** Set of tags assigned to the document.
 
 ### `read_doc`
 
@@ -191,7 +217,7 @@ config = AthenaeumConfig(similarity_threshold=0.35)
 kb = Athenaeum(embeddings=embeddings, config=config)
 
 # Low-scoring chunks are silently dropped from vector and hybrid results
-hits = kb.search_docs("quarterly revenue", strategy="vector")
+hits = kb.search_kb("quarterly revenue", strategy="vector")
 ```
 
 > **Breaking change:** Athenaeum now creates Chroma collections with `hnsw:space=cosine`. If you have an existing persistent index (in `index/chroma/`) that was created without this setting, **delete the directory and re-index your documents** to get correct scores. Existing collections retain their original L2 distance function and will continue to produce scores outside [0, 1].
@@ -201,7 +227,7 @@ hits = kb.search_docs("quarterly revenue", strategy="vector")
 Pass `aggregate=False` to `search_docs` to receive raw chunk-level hits instead of one result per document. Each hit includes the exact line range, making it easy to pinpoint where a match occurs.
 
 ```python
-chunks = kb.search_docs("quarterly revenue", aggregate=False)
+chunks = kb.search_kb("quarterly revenue", aggregate=False)
 for hit in chunks:
     print(f"{hit.name} lines {hit.line_range[0]}-{hit.line_range[1]}: {hit.text[:80]}")
 ```
@@ -255,8 +281,8 @@ all_tags = kb.list_tags()  # {"finance", "important"}
 # Filter list_docs by tags
 finance_docs = kb.list_docs(tags={"finance"})
 
-# Filter search_docs by tags
-hits = kb.search_docs("revenue", tags={"finance"})
+# Filter search_kb by tags
+hits = kb.search_kb("revenue", tags={"finance"})
 ```
 
 ### `tag_doc`
@@ -303,8 +329,9 @@ When `load_doc(path)` is called:
 | Model | Description |
 |-------|-------------|
 | `Document` | Full document record (id, name, paths, line count, TOC, timestamps) |
+| `DocSummary` | Lightweight document summary returned by `list_docs` (id, name, num_lines) |
 | `SearchHit` | Document-level search result with score and snippet |
-| `ContentSearchHit` | Within-document search result with line range, text, and optional `name` (populated by `search_docs(aggregate=False)`) |
+| `ContentSearchHit` | Within-document search result with line range, text, and optional `name` (populated by `search_kb(aggregate=False)`) |
 | `Excerpt` | Text fragment from `read_doc` |
 | `TOCEntry` | Table of contents entry (title, level, line range) |
 | `ChunkMetadata` | Internal chunk metadata for indexing |

@@ -5,6 +5,7 @@ from athenaeum.config import AthenaeumConfig
 from athenaeum.models import (
     ChunkMetadata,
     ContentSearchHit,
+    DocSummary,
     Document,
     Excerpt,
     Metadata,
@@ -18,6 +19,7 @@ __all__ = [
     "AthenaeumConfig",
     "ChunkMetadata",
     "ContentSearchHit",
+    "DocSummary",
     "Document",
     "Excerpt",
     "Metadata",

@@ -12,7 +12,7 @@ from langchain_core.embeddings import Embeddings
 from athenaeum.chunker import TextSplitter, chunk_markdown
 from athenaeum.config import AthenaeumConfig
 from athenaeum.document_store import DocumentStore
-from athenaeum.models import ChunkMetadata, ContentSearchHit, Document, Excerpt, SearchHit
+from athenaeum.models import ChunkMetadata, ContentSearchHit, DocSummary, Document, Excerpt, SearchHit
 from athenaeum.ocr import OCRProvider, get_ocr_provider
 from athenaeum.search.bm25 import BM25Index
 from athenaeum.search.hybrid import reciprocal_rank_fusion
@@ -151,28 +151,45 @@ class Athenaeum:
         """Return all tags across all documents."""
         return self._doc_store.list_tags()
 
-    def list_docs(self, tags: set[str] | None = None) -> list[SearchHit]:
+    def list_docs(self, tags: set[str] | None = None) -> list[DocSummary]:
         """List documents in the knowledge base, optionally filtered by tags.
 
         Args:
             tags: If provided, only return documents matching any of these tags (OR semantics).
         """
         docs = self._doc_store.list_by_tags(tags) if tags else self._doc_store.list_all()
-        results = []
-        for doc in docs:
-            results.append(
-                SearchHit(
-                    id=doc.id,
-                    name=doc.name,
-                    num_lines=doc.num_lines,
-                    table_of_contents=doc.format_toc(),
-                    tags=doc.tags,
-                )
-            )
-        return results
+        return [DocSummary(id=doc.id, name=doc.name, num_lines=doc.num_lines) for doc in docs]
+
+    def get_toc(self, doc_id: str) -> str:
+        """Return the table of contents for a document as a formatted string.
+
+        Args:
+            doc_id: Document identifier.
+
+        Returns:
+            Formatted table of contents string.
+        """
+        doc = self._doc_store.get(doc_id)
+        if doc is None:
+            raise ValueError(f"Document not found: {doc_id}")
+        return doc.format_toc()
+
+    def get_tags(self, doc_id: str) -> set[str]:
+        """Return the tags for a document.
+
+        Args:
+            doc_id: Document identifier.
+
+        Returns:
+            Set of tags assigned to the document.
+        """
+        doc = self._doc_store.get(doc_id)
+        if doc is None:
+            raise ValueError(f"Document not found: {doc_id}")
+        return doc.tags
 
     @overload
-    def search_docs(
+    def search_kb(
         self,
         query: str,
         top_k: int = ...,
@@ -183,7 +200,7 @@ class Athenaeum:
     ) -> list[SearchHit]: ...
 
     @overload
-    def search_docs(
+    def search_kb(
         self,
         query: str,
         top_k: int = ...,
@@ -193,7 +210,7 @@ class Athenaeum:
         aggregate: Literal[False] = ...,
     ) -> list[ContentSearchHit]: ...
 
-    def search_docs(
+    def search_kb(
         self,
         query: str,
         top_k: int = 10,
@@ -202,7 +219,7 @@ class Athenaeum:
         tags: set[str] | None = None,
         aggregate: bool = True,
     ) -> list[SearchHit] | list[ContentSearchHit]:
-        """Search across all documents.
+        """Search across all documents in the knowledge base.
 
         Args:
             query: Search query text.
@@ -272,7 +289,7 @@ class Athenaeum:
 
         return results_hit[:top_k]
 
-    def search_doc_contents(
+    def search_doc(
         self,
         doc_id: str,
         query: str,

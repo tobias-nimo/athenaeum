@@ -50,6 +50,14 @@ class Document(BaseModel):
         return "\n".join(lines)
 
 
+class DocSummary(BaseModel):
+    """Lightweight document summary returned by list_docs."""
+
+    id: str = Field(..., description="Document identifier")
+    name: str = Field(..., description="Document name")
+    num_lines: int = Field(..., description="Total lines in document")
+
+
 class SearchHit(BaseModel):
     """Search result for document-level search."""
 

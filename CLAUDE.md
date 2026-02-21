@@ -48,8 +48,8 @@ src/athenaeum/
 ### Core Flow
 
 1. **load_doc(path)** → validate → OCR convert to markdown → extract TOC → chunk → index (BM25 + vector)
-2. **search_docs(query)** → run search strategy → aggregate by document → return ranked results
-3. **search_doc_contents(doc_id, query)** → search within specific document → return chunks
+2. **search_kb(query)** → run search strategy → aggregate by document → return ranked results
+3. **search_doc(doc_id, query)** → search within specific document → return chunks
 4. **read_doc(doc_id, start_line, end_line)** → read specific line range
 
 ### Storage Layout
@@ -68,8 +68,9 @@ src/athenaeum/
 | Model | Purpose |
 |-------|---------|
 | `Document` | Full document record with paths, TOC, timestamps, tags |
+| `DocSummary` | Lightweight summary returned by `list_docs` (id, name, num_lines) |
 | `SearchHit` | Document-level search result |
-| `ContentSearchHit` | Within-document search result with line range; `name` populated by `search_docs(aggregate=False)` |
+| `ContentSearchHit` | Within-document search result with line range; `name` populated by `search_kb(aggregate=False)` |
 | `Excerpt` | Text fragment from read_doc |
 | `TOCEntry` | Table of contents entry (title, level, line range) |
 | `ChunkMetadata` | Internal chunk for indexing |
@@ -133,10 +134,12 @@ kb = Athenaeum(embeddings=embeddings, config=config, ocr_provider=ocr)
 
 # Core methods
 doc_id = kb.load_doc(path, tags=None)           # Load document
-kb.list_docs(tags=None)                          # List all documents
-kb.search_docs(query, top_k, scope, strategy, tags, aggregate=True)  # Search across docs
-kb.search_doc_contents(doc_id, query, top_k, strategy)  # Search within doc
+kb.list_docs(tags=None)                          # List documents (id, name, num_lines)
+kb.search_kb(query, top_k, scope, strategy, tags, aggregate=True)  # Search across docs
+kb.search_doc(doc_id, query, top_k, strategy)   # Search within doc
 kb.read_doc(doc_id, start_line, end_line)        # Read line range
+kb.get_toc(doc_id)                              # Get table of contents string
+kb.get_tags(doc_id)                             # Get tags for a document
 
 # Tag management
 kb.tag_doc(doc_id, tags)
