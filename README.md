@@ -149,14 +149,35 @@ from athenaeum import AthenaeumConfig
 
 config = AthenaeumConfig(
     storage_dir=Path.home() / ".athenaeum",  # Where to store documents and indexes
-    chunk_size=80,                           # Lines per chunk
-    chunk_overlap=20,                        # Overlapping lines between chunks
+    chunk_size=1500,                         # Characters per chunk
+    chunk_overlap=200,                       # Overlapping characters between chunks
     rrf_k=60,                                # RRF constant for hybrid search
     default_strategy="hybrid",               # Default search strategy
 )
 
 kb = Athenaeum(embeddings=embeddings, config=config)
 ```
+
+### Custom text splitter
+
+Pass any object with a `split_text(str) -> list[str]` method to override the default chunking strategy. This is useful for token-based splitting or domain-specific separator rules.
+
+```python
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+import tiktoken
+
+enc = tiktoken.get_encoding("cl100k_base") # or tiktoken.encoding_for_model("text-embedding-3-small")
+token_splitter = RecursiveCharacterTextSplitter.from_language(
+    Language.MARKDOWN,
+    chunk_size=256,
+    chunk_overlap=32,
+    length_function=lambda text: len(enc.encode(text)),
+)
+
+kb = Athenaeum(embeddings=embeddings, config=config, text_splitter=token_splitter)
+```
+
+> **Note:** When `text_splitter` is provided, `chunk_size` and `chunk_overlap` in `AthenaeumConfig` are ignored — sizing is controlled entirely by the splitter.
 
 ## OCR backends
 
@@ -247,7 +268,7 @@ When `load_doc(path)` is called:
 
 1. **Validation** -- verify the file exists and the format is supported.
 2. **Content extraction** -- convert the file to Markdown using the configured OCR backend.
-3. **Pre-processing** -- generate metadata, extract a table of contents from headings, and chunk the Markdown with heading-aware boundary snapping.
+3. **Pre-processing** -- generate metadata, extract a table of contents from headings, and chunk the Markdown using `RecursiveCharacterTextSplitter` with markdown-aware separators (headings first, then paragraphs, then lines).
 4. **Indexing** -- generate vector embeddings and store them in Chroma; add chunks to the BM25 index.
 
 ## Data models

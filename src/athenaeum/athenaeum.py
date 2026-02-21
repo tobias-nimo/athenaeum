@@ -9,7 +9,7 @@ from typing import Literal
 
 from langchain_core.embeddings import Embeddings
 
-from athenaeum.chunker import chunk_markdown
+from athenaeum.chunker import TextSplitter, chunk_markdown
 from athenaeum.config import AthenaeumConfig
 from athenaeum.document_store import DocumentStore
 from athenaeum.models import ChunkMetadata, ContentSearchHit, Document, Excerpt, SearchHit
@@ -29,8 +29,10 @@ class Athenaeum:
         embeddings: Embeddings,
         config: AthenaeumConfig | None = None,
         ocr_provider: OCRProvider | None = None,
+        text_splitter: TextSplitter | None = None,
     ) -> None:
         self._config = config or AthenaeumConfig()
+        self._text_splitter = text_splitter
         self._storage = StorageManager(self._config.storage_dir)
         self._doc_store = DocumentStore(self._storage)
         self._ocr = ocr_provider or get_ocr_provider("markitdown")
@@ -49,7 +51,11 @@ class Athenaeum:
             if md_path.exists():
                 text = md_path.read_text()
                 chunks = chunk_markdown(
-                    text, doc.id, self._config.chunk_size, self._config.chunk_overlap
+                    text,
+                    doc.id,
+                    self._config.chunk_size,
+                    self._config.chunk_overlap,
+                    text_splitter=self._text_splitter,
                 )
                 self._bm25.add_chunks(chunks)
 
@@ -104,7 +110,11 @@ class Athenaeum:
 
         # Index
         chunks = chunk_markdown(
-            markdown, doc_id, self._config.chunk_size, self._config.chunk_overlap
+            markdown,
+            doc_id,
+            self._config.chunk_size,
+            self._config.chunk_overlap,
+            text_splitter=self._text_splitter,
         )
         self._bm25.add_chunks(chunks)
         self._vector.add_chunks(chunks)

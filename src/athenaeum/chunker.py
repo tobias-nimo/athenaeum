@@ -1,77 +1,72 @@
-"""Line-aware markdown chunking with heading-boundary snapping."""
+"""Markdown chunking via LangChain RecursiveCharacterTextSplitter."""
 
 from __future__ import annotations
 
-import re
+from typing import Protocol, runtime_checkable
+
+from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from athenaeum.models import ChunkMetadata
 
-_HEADING_RE = re.compile(r"^#{1,6}\s+")
+
+@runtime_checkable
+class TextSplitter(Protocol):
+    """Minimal protocol for LangChain-compatible text splitters."""
+
+    def split_text(self, text: str) -> list[str]: ...
 
 
-def _find_heading_lines(lines: list[str]) -> set[int]:
-    """Return 0-indexed line numbers that are markdown headings."""
-    return {i for i, line in enumerate(lines) if _HEADING_RE.match(line.strip())}
+def _default_splitter(chunk_size: int, chunk_overlap: int) -> TextSplitter:
+    return RecursiveCharacterTextSplitter.from_language(
+        language=Language.MARKDOWN,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
 
 
 def chunk_markdown(
     markdown: str,
     doc_id: str,
-    chunk_size: int = 80,
-    chunk_overlap: int = 20,
+    chunk_size: int = 1500,
+    chunk_overlap: int = 200,
+    text_splitter: TextSplitter | None = None,
 ) -> list[ChunkMetadata]:
-    """Split markdown into overlapping, line-based chunks.
-
-    Chunks are snapped to heading boundaries when a heading falls within the
-    overlap region, so sections start cleanly.
+    """Split markdown into overlapping chunks with accurate 1-indexed line numbers.
 
     Args:
         markdown: Full markdown text.
         doc_id: Parent document ID.
-        chunk_size: Target number of lines per chunk.
-        chunk_overlap: Number of overlapping lines between consecutive chunks.
+        chunk_size: Characters per chunk (ignored when text_splitter is provided).
+        chunk_overlap: Overlap in characters (ignored when text_splitter is provided).
+        text_splitter: Optional custom splitter implementing split_text(). Defaults to
+            a markdown-aware RecursiveCharacterTextSplitter that respects heading boundaries.
 
     Returns:
-        List of ``ChunkMetadata`` instances.
+        List of ChunkMetadata with accurate 1-indexed line numbers.
     """
     if not markdown:
         return []
 
-    lines = markdown.split("\n")
-    total = len(lines)
+    splitter = text_splitter or _default_splitter(chunk_size, chunk_overlap)
+    chunk_texts = splitter.split_text(markdown)
 
-    heading_lines = _find_heading_lines(lines)
     chunks: list[ChunkMetadata] = []
-    start = 0
-    chunk_index = 0
-
-    while start < total:
-        end = min(start + chunk_size, total)
-        text = "\n".join(lines[start:end])
-
+    search_start = 0
+    for i, chunk_text in enumerate(chunk_texts):
+        start_char = markdown.find(chunk_text, search_start)
+        if start_char == -1:
+            start_char = search_start
+        start_line = markdown[:start_char].count("\n") + 1
+        end_line = start_line + chunk_text.count("\n")
         chunks.append(
             ChunkMetadata(
                 doc_id=doc_id,
-                chunk_index=chunk_index,
-                start_line=start + 1,  # 1-indexed
-                end_line=end,  # 1-indexed inclusive
-                text=text,
+                chunk_index=i,
+                start_line=start_line,
+                end_line=end_line,
+                text=chunk_text,
             )
         )
-        chunk_index += 1
-
-        if end >= total:
-            break
-
-        # Compute next start with overlap
-        next_start = end - chunk_overlap
-
-        # Snap to heading if one exists in the overlap zone [next_start, end)
-        for line_idx in range(next_start, end):
-            if line_idx in heading_lines:
-                next_start = line_idx
-                break
-
-        start = next_start
+        search_start = start_char + 1
 
     return chunks

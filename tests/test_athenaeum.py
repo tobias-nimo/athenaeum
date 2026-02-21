@@ -32,7 +32,7 @@ class FakeEmbeddings(Embeddings):
 
 @pytest.fixture
 def athenaeum(tmp_path: Path) -> Athenaeum:
-    config = AthenaeumConfig(storage_dir=tmp_path / "athenaeum", chunk_size=10, chunk_overlap=2)
+    config = AthenaeumConfig(storage_dir=tmp_path / "athenaeum", chunk_size=200, chunk_overlap=50)
     return Athenaeum(embeddings=FakeEmbeddings(), config=config)
 
 

@@ -10,7 +10,7 @@ class AthenaeumConfig:
     """Configuration for an Athenaeum instance."""
 
     storage_dir: Path = field(default_factory=lambda: Path.home() / ".athenaeum")
-    chunk_size: int = 80
-    chunk_overlap: int = 20
+    chunk_size: int = 1500      # Characters per chunk
+    chunk_overlap: int = 200    # Overlap in characters between consecutive chunks
     rrf_k: int = 60
     default_strategy: Literal["hybrid", "bm25", "vector"] = "hybrid"

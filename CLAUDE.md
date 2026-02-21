@@ -28,7 +28,7 @@ src/athenaeum/
 ├── models.py         # Pydantic models (Document, SearchHit, Excerpt, etc.)
 ├── document_store.py # JSON-backed document registry
 ├── storage.py        # File system layout manager
-├── chunker.py        # Line-aware markdown chunking with heading snapping
+├── chunker.py        # Markdown chunking via LangChain RecursiveCharacterTextSplitter
 ├── toc.py            # Table of contents extraction from markdown
 ├── ocr/              # Document-to-markdown converters
 │   ├── base.py       # OCRProvider ABC
@@ -106,8 +106,8 @@ Fixtures in `tests/fixtures/`: sample.md, sample.txt
 ```python
 AthenaeumConfig(
     storage_dir=Path.home() / ".athenaeum",  # Storage root
-    chunk_size=80,                            # Lines per chunk
-    chunk_overlap=20,                         # Overlap between chunks
+    chunk_size=1500,                          # Characters per chunk
+    chunk_overlap=200,                        # Overlap in characters between consecutive chunks
     rrf_k=60,                                 # RRF constant for hybrid search
     default_strategy="hybrid",                # Default search strategy
 )
@@ -120,6 +120,15 @@ from athenaeum import Athenaeum, AthenaeumConfig, get_ocr_provider
 
 # Initialize
 kb = Athenaeum(embeddings=embeddings, config=config, ocr_provider=ocr)
+# With custom text splitter (e.g. token-based)
+# from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+# import tiktoken
+# enc = tiktoken.encoding_for_model("gpt-4o")
+# token_splitter = RecursiveCharacterTextSplitter.from_language(
+#     Language.MARKDOWN, chunk_size=256, chunk_overlap=32,
+#     length_function=lambda text: len(enc.encode(text)),
+# )
+# kb = Athenaeum(embeddings=embeddings, ocr_provider=ocr, config=config, text_splitter=token_splitter)
 
 # Core methods
 doc_id = kb.load_doc(path, tags=None)           # Load document
@@ -149,6 +158,6 @@ kb.list_tags()
 - Uses Pydantic v2 for models
 - LangChain for embeddings interface and Chroma integration
 - Line numbers are 1-indexed in all APIs
-- Chunks snap to heading boundaries in overlap regions
+- Chunking uses `RecursiveCharacterTextSplitter.from_language(Language.MARKDOWN)` by default; pass a custom `text_splitter` to `Athenaeum()` for token-based or other strategies
 - BM25 index rebuilds on startup from stored markdown files
 - Vector index persists in Chroma directory
