@@ -8,6 +8,7 @@ import pytest
 from langchain_core.embeddings import Embeddings
 
 from athenaeum import Athenaeum, AthenaeumConfig
+from athenaeum.models import ContentSearchHit, DocSummary, SearchHit
 
 
 class FakeEmbeddings(Embeddings):
@@ -32,8 +33,9 @@ class FakeEmbeddings(Embeddings):
 
 @pytest.fixture
 def athenaeum(tmp_path: Path) -> Athenaeum:
-    config = AthenaeumConfig(storage_dir=tmp_path / "athenaeum", chunk_size=200, chunk_overlap=50)
-    return Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    from athenaeum.chunker import make_splitter
+    config = AthenaeumConfig(storage_dir=tmp_path / "athenaeum")
+    return Athenaeum(embeddings=FakeEmbeddings(), config=config, text_splitter=make_splitter(chunk_size=200, chunk_overlap=50))
 
 
 def test_load_doc_md(athenaeum: Athenaeum, sample_md_path: Path) -> None:
@@ -57,37 +59,46 @@ def test_list_docs(athenaeum: Athenaeum, sample_md_path: Path) -> None:
     docs = athenaeum.list_docs()
     assert len(docs) == 1
     assert docs[0].name == "sample.md"
+    assert isinstance(docs[0], DocSummary)
 
 
-def test_search_docs_contents(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+def test_list_docs_no_toc_or_tags(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+    athenaeum.load_doc(str(sample_md_path), tags={"report"})
+    docs = athenaeum.list_docs()
+    assert len(docs) == 1
+    assert not hasattr(docs[0], "table_of_contents")
+    assert not hasattr(docs[0], "tags")
+
+
+def test_search_kb_contents(athenaeum: Athenaeum, sample_md_path: Path) -> None:
     athenaeum.load_doc(str(sample_md_path))
-    results = athenaeum.search_docs("search strategies", strategy="bm25")
+    results = athenaeum.search_kb("search strategies", strategy="bm25")
     assert len(results) > 0
 
 
-def test_search_docs_names(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+def test_search_kb_names(athenaeum: Athenaeum, sample_md_path: Path) -> None:
     athenaeum.load_doc(str(sample_md_path))
-    results = athenaeum.search_docs("sample", scope="names")
+    results = athenaeum.search_kb("sample", scope="names")
     assert len(results) == 1
     assert results[0].name == "sample.md"
 
 
-def test_search_docs_names_no_match(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+def test_search_kb_names_no_match(athenaeum: Athenaeum, sample_md_path: Path) -> None:
     athenaeum.load_doc(str(sample_md_path))
-    results = athenaeum.search_docs("nonexistent", scope="names")
+    results = athenaeum.search_kb("nonexistent", scope="names")
     assert len(results) == 0
 
 
-def test_search_doc_contents(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+def test_search_doc(athenaeum: Athenaeum, sample_md_path: Path) -> None:
     doc_id = athenaeum.load_doc(str(sample_md_path))
-    results = athenaeum.search_doc_contents(doc_id, "BM25 keyword search", strategy="bm25")
+    results = athenaeum.search_doc(doc_id, "BM25 keyword search", strategy="bm25")
     assert len(results) > 0
     assert results[0].doc_id == doc_id
 
 
-def test_search_doc_contents_not_found(athenaeum: Athenaeum) -> None:
+def test_search_doc_not_found(athenaeum: Athenaeum) -> None:
     with pytest.raises(ValueError, match="Document not found"):
-        athenaeum.search_doc_contents("fake-id", "query")
+        athenaeum.search_doc("fake-id", "query")
 
 
 def test_read_doc(athenaeum: Athenaeum, sample_md_path: Path) -> None:
@@ -104,15 +115,15 @@ def test_read_doc_not_found(athenaeum: Athenaeum) -> None:
         athenaeum.read_doc("fake-id")
 
 
-def test_search_docs_vector(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+def test_search_kb_vector(athenaeum: Athenaeum, sample_md_path: Path) -> None:
     athenaeum.load_doc(str(sample_md_path))
-    results = athenaeum.search_docs("search", strategy="vector")
+    results = athenaeum.search_kb("search", strategy="vector")
     assert len(results) > 0
 
 
-def test_search_docs_hybrid(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+def test_search_kb_hybrid(athenaeum: Athenaeum, sample_md_path: Path) -> None:
     athenaeum.load_doc(str(sample_md_path))
-    results = athenaeum.search_docs("search", strategy="hybrid")
+    results = athenaeum.search_kb("search", strategy="hybrid")
     assert len(results) > 0
 
 
@@ -126,24 +137,20 @@ def test_multiple_docs(
 
 
 def test_load_doc_with_tags(athenaeum: Athenaeum, sample_md_path: Path) -> None:
-    athenaeum.load_doc(str(sample_md_path), tags={"report", "finance"})
-    docs = athenaeum.list_docs()
-    assert len(docs) == 1
-    assert docs[0].tags == {"report", "finance"}
+    doc_id = athenaeum.load_doc(str(sample_md_path), tags={"report", "finance"})
+    assert athenaeum.get_tags(doc_id) == {"report", "finance"}
 
 
 def test_tag_doc(athenaeum: Athenaeum, sample_md_path: Path) -> None:
     doc_id = athenaeum.load_doc(str(sample_md_path))
     athenaeum.tag_doc(doc_id, {"new-tag", "another"})
-    docs = athenaeum.list_docs()
-    assert docs[0].tags == {"new-tag", "another"}
+    assert athenaeum.get_tags(doc_id) == {"new-tag", "another"}
 
 
 def test_untag_doc(athenaeum: Athenaeum, sample_md_path: Path) -> None:
     doc_id = athenaeum.load_doc(str(sample_md_path), tags={"a", "b", "c"})
     athenaeum.untag_doc(doc_id, {"b"})
-    docs = athenaeum.list_docs()
-    assert docs[0].tags == {"a", "c"}
+    assert athenaeum.get_tags(doc_id) == {"a", "c"}
 
 
 def test_list_tags(
@@ -164,29 +171,182 @@ def test_list_docs_filter_by_tags(
     assert filtered[0].name == "sample.md"
 
 
-def test_search_docs_filter_by_tags(
+def test_search_kb_filter_by_tags(
     athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
 ) -> None:
     athenaeum.load_doc(str(sample_md_path), tags={"report"})
     athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
-    results = athenaeum.search_docs("sample", scope="names", tags={"report"})
+    results = athenaeum.search_kb("sample", scope="names", tags={"report"})
     assert len(results) == 1
     assert results[0].name == "sample.md"
 
 
-def test_search_docs_multiple_tags_or(
+def test_search_kb_multiple_tags_or(
     athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
 ) -> None:
     athenaeum.load_doc(str(sample_md_path), tags={"report"})
     athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
-    results = athenaeum.search_docs("sample", scope="names", tags={"report", "notes"})
+    results = athenaeum.search_kb("sample", scope="names", tags={"report", "notes"})
     assert len(results) == 2
 
 
-def test_search_docs_no_tags_returns_all(
+def test_search_kb_no_tags_returns_all(
     athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
 ) -> None:
     athenaeum.load_doc(str(sample_md_path), tags={"report"})
     athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
-    results = athenaeum.search_docs("sample", scope="names")
+    results = athenaeum.search_kb("sample", scope="names")
     assert len(results) == 2
+
+
+def test_get_toc(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+    doc_id = athenaeum.load_doc(str(sample_md_path))
+    toc = athenaeum.get_toc(doc_id)
+    assert isinstance(toc, str)
+    assert len(toc) > 0
+
+
+def test_get_toc_not_found(athenaeum: Athenaeum) -> None:
+    with pytest.raises(ValueError, match="Document not found"):
+        athenaeum.get_toc("fake-id")
+
+
+def test_get_tags(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+    doc_id = athenaeum.load_doc(str(sample_md_path), tags={"a", "b"})
+    assert athenaeum.get_tags(doc_id) == {"a", "b"}
+
+
+def test_get_tags_not_found(athenaeum: Athenaeum) -> None:
+    with pytest.raises(ValueError, match="Document not found"):
+        athenaeum.get_tags("fake-id")
+
+
+def test_get_tags_empty(athenaeum: Athenaeum, sample_md_path: Path) -> None:
+    doc_id = athenaeum.load_doc(str(sample_md_path))
+    assert athenaeum.get_tags(doc_id) == set()
+
+
+# --- similarity_threshold tests ---
+
+
+def test_similarity_threshold_filters_all(tmp_path: Path, sample_md_path: Path) -> None:
+    from athenaeum.chunker import make_splitter
+    config = AthenaeumConfig(
+        storage_dir=tmp_path / "athenaeum",
+        similarity_threshold=1.0,
+    )
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config, text_splitter=make_splitter(chunk_size=200, chunk_overlap=50))
+    kb.load_doc(str(sample_md_path))
+    results = kb.search_kb("search strategies", strategy="vector")
+    assert results == []
+
+
+def test_similarity_threshold_zero_passes_all(tmp_path: Path, sample_md_path: Path) -> None:
+    from athenaeum.chunker import make_splitter
+    splitter = make_splitter(chunk_size=200, chunk_overlap=50)
+    config_thresh = AthenaeumConfig(
+        storage_dir=tmp_path / "thresh",
+        similarity_threshold=0.0,
+    )
+    config_none = AthenaeumConfig(
+        storage_dir=tmp_path / "none",
+        similarity_threshold=None,
+    )
+    kb_thresh = Athenaeum(embeddings=FakeEmbeddings(), config=config_thresh, text_splitter=splitter)
+    kb_none = Athenaeum(embeddings=FakeEmbeddings(), config=config_none, text_splitter=splitter)
+    kb_thresh.load_doc(str(sample_md_path))
+    kb_none.load_doc(str(sample_md_path))
+    results_thresh = kb_thresh.search_kb("search", strategy="vector")
+    results_none = kb_none.search_kb("search", strategy="vector")
+    assert len(results_thresh) == len(results_none)
+
+
+# --- aggregate=False tests ---
+
+
+def test_search_kb_aggregate_false_returns_content_hits(
+    athenaeum: Athenaeum, sample_md_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path))
+    results = athenaeum.search_kb("search strategies", strategy="bm25", aggregate=False)
+    assert len(results) > 0
+    assert all(isinstance(r, ContentSearchHit) for r in results)
+
+
+def test_search_kb_aggregate_false_name_populated(
+    athenaeum: Athenaeum, sample_md_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path))
+    results = athenaeum.search_kb("search strategies", strategy="bm25", aggregate=False)
+    assert len(results) > 0
+    assert all(r.name == "sample.md" for r in results)
+
+
+def test_search_kb_aggregate_false_respects_top_k(
+    athenaeum: Athenaeum, sample_md_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path))
+    top_k = 2
+    results = athenaeum.search_kb("search", strategy="bm25", top_k=top_k, aggregate=False)
+    assert len(results) <= top_k
+
+
+def test_search_kb_aggregate_false_with_tags(
+    athenaeum: Athenaeum, sample_md_path: Path, sample_txt_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path), tags={"report"})
+    athenaeum.load_doc(str(sample_txt_path), tags={"notes"})
+    results = athenaeum.search_kb(
+        "search", strategy="bm25", tags={"report"}, aggregate=False
+    )
+    assert all(r.name == "sample.md" for r in results)
+
+
+def test_search_kb_aggregate_true_default(
+    athenaeum: Athenaeum, sample_md_path: Path
+) -> None:
+    athenaeum.load_doc(str(sample_md_path))
+    results = athenaeum.search_kb("search strategies", strategy="bm25")
+    assert len(results) > 0
+    assert all(isinstance(r, SearchHit) for r in results)
+
+
+# --- per-call chunk params & auto_chunk tests ---
+
+
+def test_load_doc_per_call_chunk_size(tmp_path: Path, sample_md_path: Path) -> None:
+    """load_doc with explicit chunk_size/chunk_overlap overrides instance splitter."""
+    config = AthenaeumConfig(storage_dir=tmp_path / "kb")
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    # Should not raise; per-call params create a fresh splitter
+    doc_id = kb.load_doc(str(sample_md_path), chunk_size=300, chunk_overlap=30)
+    assert isinstance(doc_id, str)
+    results = kb.search_kb("search", strategy="bm25")
+    assert len(results) > 0
+
+
+def test_load_doc_per_call_separators(tmp_path: Path, sample_md_path: Path) -> None:
+    """load_doc with explicit separators overrides markdown defaults."""
+    config = AthenaeumConfig(storage_dir=tmp_path / "kb")
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    doc_id = kb.load_doc(str(sample_md_path), chunk_size=400, chunk_overlap=50, separators=["\n\n", "\n", " "])
+    assert isinstance(doc_id, str)
+
+
+def test_auto_chunk_enabled(tmp_path: Path, sample_md_path: Path) -> None:
+    """auto_chunk=True picks chunk sizes automatically; documents load without error."""
+    config = AthenaeumConfig(storage_dir=tmp_path / "kb", auto_chunk=True)
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    doc_id = kb.load_doc(str(sample_md_path))
+    assert isinstance(doc_id, str)
+    results = kb.search_kb("search", strategy="bm25")
+    assert len(results) > 0
+
+
+def test_per_call_overrides_auto_chunk(tmp_path: Path, sample_md_path: Path) -> None:
+    """Per-call chunk_size/chunk_overlap takes priority over auto_chunk."""
+    config = AthenaeumConfig(storage_dir=tmp_path / "kb", auto_chunk=True)
+    kb = Athenaeum(embeddings=FakeEmbeddings(), config=config)
+    # Explicit params should be accepted even when auto_chunk is enabled
+    doc_id = kb.load_doc(str(sample_md_path), chunk_size=500, chunk_overlap=50)
+    assert isinstance(doc_id, str)

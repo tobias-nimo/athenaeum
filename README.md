@@ -30,10 +30,10 @@ kb = Athenaeum(embeddings=embeddings)
 doc_id = kb.load_doc("report.pdf")
 
 # Search across all documents
-hits = kb.search_docs("quarterly revenue", top_k=5)
+hits = kb.search_kb("quarterly revenue", top_k=5)
 
 # Search within a specific document
-chunks = kb.search_doc_contents(doc_id, "executive summary")
+chunks = kb.search_doc(doc_id, "executive summary")
 
 # Read specific lines
 excerpt = kb.read_doc(doc_id, start_line=1, end_line=50)
@@ -49,12 +49,21 @@ docs = kb.list_docs()
 Load a document into the knowledge base, automatically extracting content, metadata, and embeddings.
 
 ```python
-load_doc(path: str, tags: set[str] | None = None) -> str
+load_doc(
+    path: str,
+    tags: set[str] | None = None,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+    separators: list[str] | None = None,
+) -> str
 ```
 
 **Parameters:**
 - `path`: Path to the document file
 - `tags`: Optional set of tags to assign to the document
+- `chunk_size`: Characters per chunk. When provided, overrides the instance `text_splitter` and `config.auto_chunk`.
+- `chunk_overlap`: Overlapping characters between consecutive chunks. When provided (together with or without `chunk_size`), overrides the instance `text_splitter` and `config.auto_chunk`.
+- `separators`: Custom separator list for splitting. When provided, replaces the default markdown-aware separators.
 
 **Supported formats:** PDF, PPTX, DOCX, XLSX, JSON, CSV, TXT, MD, HTML, XML, RTF, EPUB
 
@@ -65,26 +74,27 @@ load_doc(path: str, tags: set[str] | None = None) -> str
 List all documents currently stored in the knowledge base.
 
 ```python
-list_docs(tags: set[str] | None = None) -> list[SearchHit]
+list_docs(tags: set[str] | None = None) -> list[DocSummary]
 ```
 
 **Parameters:**
 - `tags`: Optional set of tags to filter by (OR semantics)
 
-**Returns:** A list of documents with metadata (id, name, line count, table of contents, tags) and relevance scores.
+**Returns:** A list of `DocSummary` objects with `id`, `name`, and `num_lines`. Use `get_toc` and `get_tags` to retrieve per-document details.
 
-### `search_docs`
+### `search_kb`
 
 Search across all documents in the knowledge base.
 
 ```python
-search_docs(
+search_kb(
     query: str,
     top_k: int = 10,
     scope: Literal["names", "contents"] = "contents",
     strategy: Literal["hybrid", "bm25", "vector"] = "hybrid",
     tags: set[str] | None = None,
-) -> list[SearchHit]
+    aggregate: bool = True,
+) -> list[SearchHit] | list[ContentSearchHit]
 ```
 
 **Parameters:**
@@ -98,15 +108,16 @@ search_docs(
   - `"hybrid"`: Combines vector and BM25 search (default)
   - `"bm25"`: Keyword-based search only
   - `"vector"`: Semantic similarity search only
+- `aggregate`: If `True` (default), collapse chunk results into one `SearchHit` per document. If `False`, return raw `ContentSearchHit` objects with exact line ranges.
 
-**Returns:** A ranked list of `SearchHit` objects matching the query.
+**Returns:** When `aggregate=True`: a ranked list of `SearchHit` objects (one per document). When `aggregate=False`: a ranked list of `ContentSearchHit` objects (one per chunk).
 
-### `search_doc_contents`
+### `search_doc`
 
 Search within a specific document.
 
 ```python
-search_doc_contents(
+search_doc(
     doc_id: str,
     query: str,
     top_k: int = 5,
@@ -121,6 +132,19 @@ search_doc_contents(
 - `strategy`: Search strategy (`"hybrid"`, `"bm25"`, or `"vector"`)
 
 **Returns:** A list of matching content fragments with line ranges and relevance scores.
+
+### `get_toc`
+
+Return the table of contents for a document.
+
+```python
+get_toc(doc_id: str) -> str
+```
+
+**Parameters:**
+- `doc_id`: Document identifier
+
+**Returns:** Formatted table of contents string with section titles and line ranges.
 
 ### `read_doc`
 
@@ -149,24 +173,38 @@ from athenaeum import AthenaeumConfig
 
 config = AthenaeumConfig(
     storage_dir=Path.home() / ".athenaeum",  # Where to store documents and indexes
-    chunk_size=1500,                         # Characters per chunk
-    chunk_overlap=200,                       # Overlapping characters between chunks
+    auto_chunk=False,                        # Auto-select chunk sizes based on document length
     rrf_k=60,                                # RRF constant for hybrid search
     default_strategy="hybrid",               # Default search strategy
+    similarity_threshold=None,               # Min cosine score [0, 1]; None = no filter
 )
 
 kb = Athenaeum(embeddings=embeddings, config=config)
 ```
 
-### Custom text splitter
+### Chunking strategies
 
-Pass any object with a `split_text(str) -> list[str]` method to override the default chunking strategy. This is useful for token-based splitting or domain-specific separator rules.
+Athenaeum supports four ways to control how documents are split into chunks, applied in priority order:
+
+#### 1. Per-document params in `load_doc` (highest priority)
+
+Override chunking for a single document by passing `chunk_size`, `chunk_overlap`, and/or `separators` directly to `load_doc`. This takes priority over everything else.
+
+```python
+# Fine-grained control per document
+doc_id = kb.load_doc("report.pdf", chunk_size=800, chunk_overlap=100)
+doc_id = kb.load_doc("notes.md", chunk_size=400, chunk_overlap=40, separators=["\n\n", "\n"])
+```
+
+#### 2. Instance-level custom splitter
+
+Pass any object with a `split_text(str) -> list[str]` method to `Athenaeum()`. Useful for token-based splitting or domain-specific rules. This is overridden by per-document params.
 
 ```python
 from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 import tiktoken
 
-enc = tiktoken.get_encoding("cl100k_base") # or tiktoken.encoding_for_model("text-embedding-3-small")
+enc = tiktoken.get_encoding("cl100k_base")
 token_splitter = RecursiveCharacterTextSplitter.from_language(
     Language.MARKDOWN,
     chunk_size=256,
@@ -177,7 +215,59 @@ token_splitter = RecursiveCharacterTextSplitter.from_language(
 kb = Athenaeum(embeddings=embeddings, config=config, text_splitter=token_splitter)
 ```
 
-> **Note:** When `text_splitter` is provided, `chunk_size` and `chunk_overlap` in `AthenaeumConfig` are ignored — sizing is controlled entirely by the splitter.
+#### 3. Auto-chunking
+
+Set `auto_chunk=True` in `AthenaeumConfig` to let Athenaeum pick optimal `chunk_size` and `chunk_overlap` automatically based on each document's character count:
+
+| Document size | `chunk_size` | `chunk_overlap` |
+|---------------|-------------|-----------------|
+| Short (< 5 000 chars) | 500 | 50 |
+| Medium (5 000 – 50 000 chars) | 1 500 | 200 |
+| Large (> 50 000 chars) | 3 000 | 400 |
+
+```python
+config = AthenaeumConfig(auto_chunk=True)
+kb = Athenaeum(embeddings=embeddings, config=config)
+```
+
+#### 4. Default splitter (lowest priority)
+
+When none of the above are configured, Athenaeum uses a markdown-aware `RecursiveCharacterTextSplitter` with `chunk_size=1 500` and `chunk_overlap=200`.
+
+A good starting point for medium-sized markdown documents (books, reports, papers):
+
+```python
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+
+splitter = RecursiveCharacterTextSplitter.from_language(
+    Language.MARKDOWN, chunk_size=1500, chunk_overlap=200
+)
+kb = Athenaeum(embeddings=embeddings, text_splitter=splitter)
+```
+
+### Similarity threshold
+
+Filter out low-confidence vector results by setting `similarity_threshold` in `AthenaeumConfig`. Scores are cosine similarity values in [0, 1]; only chunks that meet or exceed the threshold are returned.
+
+```python
+config = AthenaeumConfig(similarity_threshold=0.35)
+kb = Athenaeum(embeddings=embeddings, config=config)
+
+# Low-scoring chunks are silently dropped from vector and hybrid results
+hits = kb.search_kb("quarterly revenue", strategy="vector")
+```
+
+> **Breaking change:** Athenaeum now creates Chroma collections with `hnsw:space=cosine`. If you have an existing persistent index (in `index/chroma/`) that was created without this setting, **delete the directory and re-index your documents** to get correct scores. Existing collections retain their original L2 distance function and will continue to produce scores outside [0, 1].
+
+### Chunk-level results
+
+Pass `aggregate=False` to `search_docs` to receive raw chunk-level hits instead of one result per document. Each hit includes the exact line range, making it easy to pinpoint where a match occurs.
+
+```python
+chunks = kb.search_kb("quarterly revenue", aggregate=False)
+for hit in chunks:
+    print(f"{hit.name} lines {hit.line_range[0]}-{hit.line_range[1]}: {hit.text[:80]}")
+```
 
 ## OCR backends
 
@@ -228,8 +318,8 @@ all_tags = kb.list_tags()  # {"finance", "important"}
 # Filter list_docs by tags
 finance_docs = kb.list_docs(tags={"finance"})
 
-# Filter search_docs by tags
-hits = kb.search_docs("revenue", tags={"finance"})
+# Filter search_kb by tags
+hits = kb.search_kb("revenue", tags={"finance"})
 ```
 
 ### `tag_doc`
@@ -246,6 +336,14 @@ Remove tags from an existing document.
 
 ```python
 untag_doc(doc_id: str, tags: set[str]) -> None
+```
+
+### `get_tags`
+
+Return the tags for a document.
+
+```python
+get_tags(doc_id: str) -> set[str]
 ```
 
 ### `list_tags`
@@ -276,8 +374,9 @@ When `load_doc(path)` is called:
 | Model | Description |
 |-------|-------------|
 | `Document` | Full document record (id, name, paths, line count, TOC, timestamps) |
+| `DocSummary` | Lightweight document summary returned by `list_docs` (id, name, num_lines) |
 | `SearchHit` | Document-level search result with score and snippet |
-| `ContentSearchHit` | Within-document search result with line range and text |
+| `ContentSearchHit` | Within-document search result with line range, text, and optional `name` (populated by `search_kb(aggregate=False)`) |
 | `Excerpt` | Text fragment from `read_doc` |
 | `TOCEntry` | Table of contents entry (title, level, line range) |
 | `ChunkMetadata` | Internal chunk metadata for indexing |
@@ -291,6 +390,8 @@ pytest
 ruff check src/
 mypy src/
 ```
+
+---
 
 ## License
 

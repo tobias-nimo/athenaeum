@@ -5,14 +5,14 @@ from __future__ import annotations
 import shutil
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import Literal, overload
 
 from langchain_core.embeddings import Embeddings
 
-from athenaeum.chunker import TextSplitter, chunk_markdown
+from athenaeum.chunker import TextSplitter, auto_chunk_splitter, chunk_markdown, make_splitter
 from athenaeum.config import AthenaeumConfig
 from athenaeum.document_store import DocumentStore
-from athenaeum.models import ChunkMetadata, ContentSearchHit, Document, Excerpt, SearchHit
+from athenaeum.models import ChunkMetadata, ContentSearchHit, DocSummary, Document, Excerpt, SearchHit
 from athenaeum.ocr import OCRProvider, get_ocr_provider
 from athenaeum.search.bm25 import BM25Index
 from athenaeum.search.hybrid import reciprocal_rank_fusion
@@ -44,27 +44,66 @@ class Athenaeum:
         )
         self._reindex_bm25()
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_splitter(
+        self,
+        markdown: str,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+        separators: list[str] | None = None,
+    ) -> TextSplitter:
+        """Return the best splitter for the given context.
+
+        Priority (highest to lowest):
+        1. Per-call params (``chunk_size``, ``chunk_overlap``, ``separators``).
+        2. Instance-level ``text_splitter`` passed to ``__init__``.
+        3. Auto-chunking (when ``config.auto_chunk=True``): sizes derived from
+           document length.
+        4. Library default: markdown-aware splitter with ``chunk_size=1 500``.
+        """
+        if chunk_size is not None or chunk_overlap is not None or separators is not None:
+            cs = chunk_size if chunk_size is not None else 1500
+            co = chunk_overlap if chunk_overlap is not None else 200
+            return make_splitter(chunk_size=cs, chunk_overlap=co, separators=separators)
+        if self._text_splitter is not None:
+            return self._text_splitter
+        if self._config.auto_chunk:
+            return auto_chunk_splitter(markdown)
+        return make_splitter()
+
     def _reindex_bm25(self) -> None:
         """Rebuild BM25 index from all stored documents."""
         for doc in self._doc_store.list_all():
             md_path = Path(doc.path_to_md)
             if md_path.exists():
                 text = md_path.read_text()
-                chunks = chunk_markdown(
-                    text,
-                    doc.id,
-                    self._config.chunk_size,
-                    self._config.chunk_overlap,
-                    text_splitter=self._text_splitter,
-                )
+                splitter = self._resolve_splitter(text)
+                chunks = chunk_markdown(text, doc.id, text_splitter=splitter)
                 self._bm25.add_chunks(chunks)
 
-    def load_doc(self, path: str, tags: set[str] | None = None) -> str:
+    def load_doc(
+        self,
+        path: str,
+        tags: set[str] | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+        separators: list[str] | None = None,
+    ) -> str:
         """Load a document into the knowledge base.
 
         Args:
             path: Path to the document file.
             tags: Optional set of tags to assign to the document.
+            chunk_size: Characters per chunk. When provided, overrides the
+                instance ``text_splitter`` and ``config.auto_chunk``.
+            chunk_overlap: Overlapping characters between chunks. When provided
+                (together with or without ``chunk_size``), overrides the
+                instance ``text_splitter`` and ``config.auto_chunk``.
+            separators: Custom separator list for splitting. When provided,
+                overrides the markdown-aware separators.
 
         Returns:
             The document ID.
@@ -109,13 +148,13 @@ class Athenaeum:
         self._doc_store.add(doc)
 
         # Index
-        chunks = chunk_markdown(
+        splitter = self._resolve_splitter(
             markdown,
-            doc_id,
-            self._config.chunk_size,
-            self._config.chunk_overlap,
-            text_splitter=self._text_splitter,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=separators,
         )
+        chunks = chunk_markdown(markdown, doc_id, text_splitter=splitter)
         self._bm25.add_chunks(chunks)
         self._vector.add_chunks(chunks)
 
@@ -151,35 +190,75 @@ class Athenaeum:
         """Return all tags across all documents."""
         return self._doc_store.list_tags()
 
-    def list_docs(self, tags: set[str] | None = None) -> list[SearchHit]:
+    def list_docs(self, tags: set[str] | None = None) -> list[DocSummary]:
         """List documents in the knowledge base, optionally filtered by tags.
 
         Args:
             tags: If provided, only return documents matching any of these tags (OR semantics).
         """
         docs = self._doc_store.list_by_tags(tags) if tags else self._doc_store.list_all()
-        results = []
-        for doc in docs:
-            results.append(
-                SearchHit(
-                    id=doc.id,
-                    name=doc.name,
-                    num_lines=doc.num_lines,
-                    table_of_contents=doc.format_toc(),
-                    tags=doc.tags,
-                )
-            )
-        return results
+        return [DocSummary(id=doc.id, name=doc.name, num_lines=doc.num_lines) for doc in docs]
 
-    def search_docs(
+    def get_toc(self, doc_id: str) -> str:
+        """Return the table of contents for a document as a formatted string.
+
+        Args:
+            doc_id: Document identifier.
+
+        Returns:
+            Formatted table of contents string.
+        """
+        doc = self._doc_store.get(doc_id)
+        if doc is None:
+            raise ValueError(f"Document not found: {doc_id}")
+        return doc.format_toc()
+
+    def get_tags(self, doc_id: str) -> set[str]:
+        """Return the tags for a document.
+
+        Args:
+            doc_id: Document identifier.
+
+        Returns:
+            Set of tags assigned to the document.
+        """
+        doc = self._doc_store.get(doc_id)
+        if doc is None:
+            raise ValueError(f"Document not found: {doc_id}")
+        return doc.tags
+
+    @overload
+    def search_kb(
+        self,
+        query: str,
+        top_k: int = ...,
+        scope: Literal["names", "contents"] = ...,
+        strategy: Literal["hybrid", "bm25", "vector"] = ...,
+        tags: set[str] | None = ...,
+        aggregate: Literal[True] = ...,
+    ) -> list[SearchHit]: ...
+
+    @overload
+    def search_kb(
+        self,
+        query: str,
+        top_k: int = ...,
+        scope: Literal["names", "contents"] = ...,
+        strategy: Literal["hybrid", "bm25", "vector"] = ...,
+        tags: set[str] | None = ...,
+        aggregate: Literal[False] = ...,
+    ) -> list[ContentSearchHit]: ...
+
+    def search_kb(
         self,
         query: str,
         top_k: int = 10,
         scope: Literal["names", "contents"] = "contents",
         strategy: Literal["hybrid", "bm25", "vector"] = "hybrid",
         tags: set[str] | None = None,
-    ) -> list[SearchHit]:
-        """Search across all documents.
+        aggregate: bool = True,
+    ) -> list[SearchHit] | list[ContentSearchHit]:
+        """Search across all documents in the knowledge base.
 
         Args:
             query: Search query text.
@@ -187,9 +266,13 @@ class Athenaeum:
             scope: ``"contents"`` to search within documents, ``"names"`` to search names only.
             strategy: Search strategy (only for ``scope="contents"``).
             tags: If provided, only search documents matching any of these tags (OR semantics).
+            aggregate: If ``True`` (default), collapse chunk results into one ``SearchHit`` per
+                document.  If ``False``, return raw ``ContentSearchHit`` objects with exact line
+                ranges.  Has no effect when ``scope="names"``.
 
         Returns:
-            Ranked list of matching documents.
+            When ``aggregate=True``: ranked list of ``SearchHit`` objects (one per document).
+            When ``aggregate=False``: ranked list of ``ContentSearchHit`` objects (one per chunk).
         """
         doc_ids: set[str] | None = None
         if tags:
@@ -199,6 +282,22 @@ class Athenaeum:
 
         if scope == "names":
             return self._search_by_name(query, top_k, doc_ids=doc_ids)
+
+        if not aggregate:
+            chunks = self._search_chunks(query, top_k=top_k, strategy=strategy, doc_ids=doc_ids)
+            results_content: list[ContentSearchHit] = []
+            for chunk, score in chunks:
+                doc = self._doc_store.get(chunk.doc_id)
+                results_content.append(
+                    ContentSearchHit(
+                        doc_id=chunk.doc_id,
+                        name=doc.name if doc is not None else "",
+                        line_range=(chunk.start_line, chunk.end_line),
+                        text=chunk.text,
+                        score=score,
+                    )
+                )
+            return results_content
 
         chunks = self._search_chunks(query, top_k=top_k * 3, strategy=strategy, doc_ids=doc_ids)
 
@@ -210,12 +309,12 @@ class Athenaeum:
                 doc_scores[chunk.doc_id] = score
                 doc_snippets[chunk.doc_id] = chunk.text[:200]
 
-        results = []
+        results_hit: list[SearchHit] = []
         for doc_id, score in sorted(doc_scores.items(), key=lambda x: x[1], reverse=True):
             doc = self._doc_store.get(doc_id)
             if doc is None:
                 continue
-            results.append(
+            results_hit.append(
                 SearchHit(
                     id=doc.id,
                     name=doc.name,
@@ -227,9 +326,9 @@ class Athenaeum:
                 )
             )
 
-        return results[:top_k]
+        return results_hit[:top_k]
 
-    def search_doc_contents(
+    def search_doc(
         self,
         doc_id: str,
         query: str,
@@ -256,6 +355,7 @@ class Athenaeum:
         return [
             ContentSearchHit(
                 doc_id=chunk.doc_id,
+                name="",
                 line_range=(chunk.start_line, chunk.end_line),
                 text=chunk.text,
                 score=score,
@@ -337,11 +437,17 @@ class Athenaeum:
             return self._bm25.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
 
         if strategy == "vector":
-            return self._vector.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
+            return self._vector.search(
+                query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids,
+                similarity_threshold=self._config.similarity_threshold,
+            )
 
         # hybrid
         bm25_results = self._bm25.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
-        vector_results = self._vector.search(query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
+        vector_results = self._vector.search(
+            query, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids,
+            similarity_threshold=self._config.similarity_threshold,
+        )
         return reciprocal_rank_fusion(
             [bm25_results, vector_results],
             k=self._config.rrf_k,

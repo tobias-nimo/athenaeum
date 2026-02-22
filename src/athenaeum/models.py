@@ -50,6 +50,14 @@ class Document(BaseModel):
         return "\n".join(lines)
 
 
+class DocSummary(BaseModel):
+    """Lightweight document summary returned by list_docs."""
+
+    id: str = Field(..., description="Document identifier")
+    name: str = Field(..., description="Document name")
+    num_lines: int = Field(..., description="Total lines in document")
+
+
 class SearchHit(BaseModel):
     """Search result for document-level search."""
 
@@ -75,6 +83,9 @@ class ContentSearchHit(BaseModel):
     """Search result for within-document content search."""
 
     doc_id: str = Field(..., description="Document identifier")
+    name: str = Field(
+        "", description="Document filename; populated by search_docs(aggregate=False)"
+    )
     line_range: tuple[int, int] = Field(..., description="Line range of the match")
     text: str = Field(..., description="Matching text content")
     score: float = Field(0.0, description="Search relevance score")

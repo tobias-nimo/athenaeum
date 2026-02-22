@@ -48,8 +48,8 @@ src/athenaeum/
 ### Core Flow
 
 1. **load_doc(path)** → validate → OCR convert to markdown → extract TOC → chunk → index (BM25 + vector)
-2. **search_docs(query)** → run search strategy → aggregate by document → return ranked results
-3. **search_doc_contents(doc_id, query)** → search within specific document → return chunks
+2. **search_kb(query)** → run search strategy → aggregate by document → return ranked results
+3. **search_doc(doc_id, query)** → search within specific document → return chunks
 4. **read_doc(doc_id, start_line, end_line)** → read specific line range
 
 ### Storage Layout
@@ -68,8 +68,9 @@ src/athenaeum/
 | Model | Purpose |
 |-------|---------|
 | `Document` | Full document record with paths, TOC, timestamps, tags |
+| `DocSummary` | Lightweight summary returned by `list_docs` (id, name, num_lines) |
 | `SearchHit` | Document-level search result |
-| `ContentSearchHit` | Within-document search result with line range |
+| `ContentSearchHit` | Within-document search result with line range; `name` populated by `search_kb(aggregate=False)` |
 | `Excerpt` | Text fragment from read_doc |
 | `TOCEntry` | Table of contents entry (title, level, line range) |
 | `ChunkMetadata` | Internal chunk for indexing |
@@ -106,12 +107,25 @@ Fixtures in `tests/fixtures/`: sample.md, sample.txt
 ```python
 AthenaeumConfig(
     storage_dir=Path.home() / ".athenaeum",  # Storage root
-    chunk_size=1500,                          # Characters per chunk
-    chunk_overlap=200,                        # Overlap in characters between consecutive chunks
+    auto_chunk=False,                         # Auto-select chunk_size/chunk_overlap from doc length
     rrf_k=60,                                 # RRF constant for hybrid search
     default_strategy="hybrid",                # Default search strategy
+    similarity_threshold=None,               # Min cosine score [0,1]; None = no filter
 )
 ```
+
+### Chunking priority (highest → lowest)
+1. Per-call params in `load_doc(chunk_size, chunk_overlap, separators)`
+2. Instance-level `text_splitter` passed to `Athenaeum()`
+3. `auto_chunk=True` → sizes derived from document character count (short/medium/large)
+4. Default: markdown-aware splitter, `chunk_size=1500`, `chunk_overlap=200`
+
+### Auto-chunk thresholds
+| Size | chunk_size | chunk_overlap |
+|------|-----------|---------------|
+| < 5 000 chars | 500 | 50 |
+| 5 000–50 000 chars | 1 500 | 200 |
+| > 50 000 chars | 3 000 | 400 |
 
 ## Key APIs
 
@@ -131,11 +145,15 @@ kb = Athenaeum(embeddings=embeddings, config=config, ocr_provider=ocr)
 # kb = Athenaeum(embeddings=embeddings, ocr_provider=ocr, config=config, text_splitter=token_splitter)
 
 # Core methods
-doc_id = kb.load_doc(path, tags=None)           # Load document
-kb.list_docs(tags=None)                          # List all documents
-kb.search_docs(query, top_k, scope, strategy, tags)  # Search across docs
-kb.search_doc_contents(doc_id, query, top_k, strategy)  # Search within doc
+doc_id = kb.load_doc(path, tags=None)                                    # Load document
+doc_id = kb.load_doc(path, chunk_size=800, chunk_overlap=80)             # Per-doc chunk params
+doc_id = kb.load_doc(path, separators=["\n\n", "\n"])                    # Custom separators
+kb.list_docs(tags=None)                          # List documents (id, name, num_lines)
+kb.search_kb(query, top_k, scope, strategy, tags, aggregate=True)  # Search across docs
+kb.search_doc(doc_id, query, top_k, strategy)   # Search within doc
 kb.read_doc(doc_id, start_line, end_line)        # Read line range
+kb.get_toc(doc_id)                              # Get table of contents string
+kb.get_tags(doc_id)                             # Get tags for a document
 
 # Tag management
 kb.tag_doc(doc_id, tags)

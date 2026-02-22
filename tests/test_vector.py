@@ -85,3 +85,28 @@ def test_vector_remove_document() -> None:
 def test_vector_add_empty() -> None:
     idx = _make_index()
     idx.add_chunks([])  # should not raise
+
+
+def test_vector_scores_in_range() -> None:
+    idx = _make_index()
+    idx.add_chunks(_make_chunks())
+    results = idx.search("python programming", top_k=10)
+    assert len(results) > 0
+    for _, score in results:
+        assert 0.0 <= score <= 1.0, f"Score {score} out of [0, 1]"
+
+
+def test_vector_threshold_excludes_below() -> None:
+    idx = _make_index()
+    idx.add_chunks(_make_chunks())
+    # threshold=1.0 means only perfect matches pass; nothing should match exactly
+    results = idx.search("python programming", top_k=10, similarity_threshold=1.0)
+    assert results == []
+
+
+def test_vector_threshold_none_returns_all() -> None:
+    idx = _make_index()
+    idx.add_chunks(_make_chunks())
+    without_threshold = idx.search("python programming", top_k=10)
+    with_none = idx.search("python programming", top_k=10, similarity_threshold=None)
+    assert len(with_none) == len(without_threshold)
