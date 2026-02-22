@@ -146,19 +146,6 @@ get_toc(doc_id: str) -> str
 
 **Returns:** Formatted table of contents string with section titles and line ranges.
 
-### `get_tags`
-
-Return the tags for a document.
-
-```python
-get_tags(doc_id: str) -> set[str]
-```
-
-**Parameters:**
-- `doc_id`: Document identifier
-
-**Returns:** Set of tags assigned to the document.
-
 ### `read_doc`
 
 Read a specific range of lines from a document.
@@ -351,6 +338,14 @@ Remove tags from an existing document.
 untag_doc(doc_id: str, tags: set[str]) -> None
 ```
 
+### `get_tags`
+
+Return the tags for a document.
+
+```python
+get_tags(doc_id: str) -> set[str]
+```
+
 ### `list_tags`
 
 Return all tags across all documents.
@@ -395,6 +390,8 @@ pytest
 ruff check src/
 mypy src/
 ```
+
+---
 
 ## License
 
